@@ -77,6 +77,7 @@ def swinv2() -> None:
     size = pre["size"]["height"] if isinstance(pre["size"], dict) else int(pre["size"])
     register({"id": "swinv2", "name": "SwinV2 AI-image detector", "file": out.name, "kind": "classifier",
               "size": size, "policy": "squash", "output": "softmax", "fake_index": fake, "weight": 0.5,
+              "cpu_optimization": "basic",       # ORT's extended fusions fail on this fp16 graph on the CPU
               "mean": pre["image_mean"], "std": pre["image_std"], "license": "Apache-2.0",
               "source": "https://huggingface.co/haywoodsloan/ai-image-detector-deploy (ONNX: LPX55/detection-model-1-ONNX)"})
 

@@ -52,6 +52,8 @@ def _exiftool(args: list[str], binary: bool = False):
 
 
 def read_metadata(ev: Evidence) -> dict:
+    if "meta" not in ev.cache and not exiftool_path().exists():
+        ev.cache["meta"] = {}                      # fresh clone without vendor/exiftool: no metadata, no crash
     if "meta" not in ev.cache:
         out = _exiftool(["-j", "-G1", "-a", "-s", "-api", "RequestAll=2", "-api", "LargeFileSupport=1",
                          "-All", "-JPEGDigest", "-JPEGQualityEstimate", str(ev.path)])

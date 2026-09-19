@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QMarginsF, Qt, QThreadPool
 from PySide6.QtGui import QColor, QPageLayout, QPageSize, QTextDocument
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
                                QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget)
 
@@ -97,6 +97,7 @@ class CompareWindow(QMainWindow):
         lay = QVBoxLayout(body)
         bar = QHBoxLayout()
         self.combo = QComboBox()
+        self.combo.setMinimumWidth(260)
         self.combo.currentTextChanged.connect(self._show)
         bar.addWidget(QLabel("Right-hand view"))
         bar.addWidget(self.combo)
@@ -107,6 +108,7 @@ class CompareWindow(QMainWindow):
         views = QSplitter(Qt.Horizontal)
         views.addWidget(self.left)
         views.addWidget(self.right)
+        views.setSizes([10_000, 10_000])             # equal halves
         self.text = QTextBrowser()
         self.text.setHtml("<i>Aligning and comparing ...</i>")
         split = QSplitter(Qt.Vertical)
@@ -318,6 +320,7 @@ class CalibrationWindow(QMainWindow):
         lay.addLayout(bar)
         self.table = QTableWidget(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         lay.addWidget(self.table, 1)
@@ -325,7 +328,7 @@ class CalibrationWindow(QMainWindow):
         lay.addWidget(self.progress)
         self.setCentralWidget(body)
         self.pool = QThreadPool(self)
-        self.pool.setMaxThreadCount(2)
+        self.pool.setMaxThreadCount(1)               # one image at a time: calibration runs for a long while
         self.signals = Signals()
         self.signals.done.connect(self._done)
         self.generation = 0
@@ -395,7 +398,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(520, 260)
+        self.resize(520, 420)
         self.cfg = online.load_config()
         se = self.cfg.get("sightengine", {})
         lay = QVBoxLayout(self)
@@ -415,6 +418,18 @@ class SettingsDialog(QDialog):
         lay.addWidget(title)
         lay.addWidget(note)
         lay.addLayout(form)
+        gpu_title = QLabel("Neural models")
+        gpu_title.setObjectName("h2")
+        self.gpu = QCheckBox("Run neural models on the GPU (DirectML)")
+        self.gpu.setChecked(bool(self.cfg.get("use_gpu", False)))
+        gpu_note = QLabel("Off by default: the models then run on the CPU (slower, always stable). On integrated graphics "
+                          "that also drive the display, long GPU jobs can trip the Windows GPU watchdog: the graphics "
+                          "driver resets and the desktop freezes. Enable only on a dedicated graphics card.")
+        gpu_note.setWordWrap(True)
+        gpu_note.setObjectName("muted")
+        lay.addWidget(gpu_title)
+        lay.addWidget(self.gpu)
+        lay.addWidget(gpu_note)
         lay.addStretch(1)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.save)
@@ -423,5 +438,6 @@ class SettingsDialog(QDialog):
 
     def save(self):
         self.cfg["sightengine"] = {"api_user": self.user.text().strip(), "api_secret": self.secret.text().strip()}
+        self.cfg["use_gpu"] = self.gpu.isChecked()
         online.save_config(self.cfg)
         self.accept()

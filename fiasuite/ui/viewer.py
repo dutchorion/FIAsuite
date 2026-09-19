@@ -81,7 +81,7 @@ class ImageView(QGraphicsView):
         other._syncing = True
         other.setTransform(self.transform())
         other.centerOn(self.mapToScene(self.viewport().rect().center()))
-        other._fitted = False
+        other._fitted = self._fitted               # a fitted pair must keep re-fitting when the window resizes
         other._syncing = False
 
     def wheelEvent(self, event):

@@ -27,7 +27,8 @@ for pattern in ("c2pa/libs/*.lib", "c2pa/libs/*.pdb", "cv2/opencv_videoio_ffmpeg
 # ExifTool and the models stay plain files beside the exe, so they can be updated or replaced by hand
 for folder in ("vendor", "models"):
     if (ROOT / folder).exists():
-        shutil.copytree(ROOT / folder, DIST / folder, dirs_exist_ok=True)
+        shutil.copytree(ROOT / folder, DIST / folder, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("_src"))     # model sources / raw weights stay out of the release
 for name in ("README.md", "LICENSES.md"):
     if (ROOT / name).exists():
         shutil.copy2(ROOT / name, DIST / name)

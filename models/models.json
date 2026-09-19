@@ -42,7 +42,8 @@
       0.225
     ],
     "license": "Apache-2.0",
-    "source": "https://huggingface.co/haywoodsloan/ai-image-detector-deploy (ONNX: LPX55/detection-model-1-ONNX)"
+    "source": "https://huggingface.co/haywoodsloan/ai-image-detector-deploy (ONNX: LPX55/detection-model-1-ONNX)",
+    "cpu_optimization": "basic"
   },
   {
     "id": "trufor",

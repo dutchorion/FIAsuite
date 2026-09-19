@@ -70,10 +70,17 @@ planes, colour channels (the Forensically tool set).
 
 ## Building from source
 
-    python -m venv .venv
-    .venv\Scripts\pip install PySide6-Essentials opencv-python-headless numpy scipy Pillow pillow-heif onnxruntime-directml requests c2pa-python pytest pyinstaller
+    python -m venv .venv                            # Python 3.12, Windows
+    .venv\Scripts\pip install -r requirements.txt
     .venv\Scripts\python -m pytest tests            # ground-truth tests on synthetic forgeries
+    .venv\Scripts\python -m fiasuite                # run from source
     .venv\Scripts\python tools\build_portable.py    # -> dist\FIASuite
+
+The tests that need the neural models skip themselves while `models/` is empty.
+
+**GPU.** Neural models run on the CPU unless *Settings > Run neural models on the GPU* is ticked. The GPU path
+uses DirectML, which works on NVIDIA, AMD and Intel. It is opt-in because on an AMD integrated GPU it froze
+the desktop and returned wrong TruFor maps; verify GPU results against the CPU before relying on them.
 
 Two things are not kept in the repository and must be restored after cloning:
 

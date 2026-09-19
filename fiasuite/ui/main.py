@@ -323,7 +323,7 @@ class MainWindow(QMainWindow):
         self.viewer.link(self.reference)
         self.reference.hide()
         self.viewer.pixel_hovered.connect(self._on_pixel)
-        split = QSplitter(Qt.Horizontal)
+        split = self.view_split = QSplitter(Qt.Horizontal)
         split.addWidget(self.viewer)
         split.addWidget(self.reference)
         lay.addWidget(split, 1)
@@ -610,6 +610,7 @@ class MainWindow(QMainWindow):
     def _toggle_side(self, on: bool):
         self._show_view(keep=True)
         if on:
+            self.view_split.setSizes([10_000, 10_000])   # equal halves
             QTimer.singleShot(0, self.viewer.fit)
 
     def _on_pixel(self, x: int, y: int):

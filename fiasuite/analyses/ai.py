@@ -1,4 +1,4 @@
-"""Local neural detectors, run with ONNX Runtime (DirectML GPU when available).
+"""Local neural detectors, run with ONNX Runtime on the CPU (DirectML GPU is opt-in, see use_gpu).
 
 Models are described in models/models.json, so detectors can be added or
 replaced without touching the code:
@@ -24,6 +24,22 @@ from ..core import ALERT, INFO, NOTE, WARN, Evidence, Finding, Result, app_dir, 
 
 _sessions: dict[str, object] = {}
 _lock = threading.Lock()
+# Neural models run strictly one at a time. Several at once starve the machine, and on an integrated GPU
+# that also drives the display they trip the Windows GPU watchdog (driver reset, frozen desktop).
+_inference = threading.Lock()
+
+
+def use_gpu() -> bool:
+    """GPU (DirectML) inference is opt-in: config.json {"use_gpu": true}, set under Settings."""
+    try:
+        return bool(json.loads((app_dir() / "config.json").read_text(encoding="utf-8")).get("use_gpu", False))
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+def _run(sess, feed: dict):
+    with _inference:
+        return sess.run(None, feed)
 
 
 def models_dir():
@@ -39,19 +55,34 @@ def load_registry() -> list[dict]:
 
 
 def _session(entry: dict):
+    import os
+
     import onnxruntime as ort
+    gpu = use_gpu()
+    key = f"{entry['id']}|{'gpu' if gpu else 'cpu'}"
     with _lock:
-        if entry["id"] not in _sessions:
+        if key not in _sessions:
             path = str(models_dir() / entry["file"])
             opts = ort.SessionOptions()
             opts.log_severity_level = 3
-            try:
-                sess = ort.InferenceSession(path, opts, providers=entry.get("providers") or
-                                            ["DmlExecutionProvider", "CPUExecutionProvider"])
-            except Exception:
-                sess = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
-            _sessions[entry["id"]] = sess
-        return _sessions[entry["id"]]
+            opts.intra_op_num_threads = max(1, (os.cpu_count() or 4) // 2)    # leave half the cores to the desktop
+            basic = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+            if not gpu and entry.get("cpu_optimization") == "basic":
+                opts.graph_optimization_level = basic
+            sess = None
+            if gpu:
+                try:
+                    sess = ort.InferenceSession(path, opts, providers=["DmlExecutionProvider", "CPUExecutionProvider"])
+                except Exception:
+                    sess = None
+            if sess is None:
+                try:
+                    sess = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+                except Exception:                  # ORT's extended fusions fail on some fp16 graphs on the CPU
+                    opts.graph_optimization_level = basic
+                    sess = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+            _sessions[key] = sess
+        return _sessions[key]
 
 
 def _prepare(bgr: np.ndarray, entry: dict) -> np.ndarray:
@@ -61,7 +92,7 @@ def _prepare(bgr: np.ndarray, entry: dict) -> np.ndarray:
 
 
 def _probability(sess, batch: np.ndarray, entry: dict) -> float:
-    out = np.asarray(sess.run(None, {sess.get_inputs()[0].name: batch})[0], np.float64).reshape(-1)
+    out = np.asarray(_run(sess, {sess.get_inputs()[0].name: batch})[0], np.float64).reshape(-1)
     if entry["output"] == "sigmoid":
         return float(1 / (1 + np.exp(-out[0])))
     e = np.exp(out - out.max())
@@ -210,7 +241,7 @@ def localize(ev: Evidence, max_side: int = 1600) -> Result:
 
 def _run_trufor(sess, bgr: np.ndarray):
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32).transpose(2, 0, 1)[None] / 256.0
-    out = dict(zip([o.name for o in sess.get_outputs()], sess.run(None, {sess.get_inputs()[0].name: rgb})))
+    out = dict(zip([o.name for o in sess.get_outputs()], _run(sess, {sess.get_inputs()[0].name: rgb})))
     logits = out["pred"][0]
     e = np.exp(logits - logits.max(axis=0, keepdims=True))
     tamper = e[1] / e.sum(axis=0)

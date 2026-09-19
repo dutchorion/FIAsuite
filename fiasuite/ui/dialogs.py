@@ -422,9 +422,11 @@ class SettingsDialog(QDialog):
         gpu_title.setObjectName("h2")
         self.gpu = QCheckBox("Run neural models on the GPU (DirectML)")
         self.gpu.setChecked(bool(self.cfg.get("use_gpu", False)))
-        gpu_note = QLabel("Off by default: the models then run on the CPU (slower, always stable). On integrated graphics "
-                          "that also drive the display, long GPU jobs can trip the Windows GPU watchdog: the graphics "
-                          "driver resets and the desktop freezes. Enable only on a dedicated graphics card.")
+        gpu_note = QLabel("Off by default: the models then run on the CPU (about half as fast, always stable). When "
+                          "switched on, every model is first run once on both GPU and CPU; if the results differ or the "
+                          "GPU crawls, that model stays on the CPU and the tool says so. Background: a graphics driver "
+                          "in a bad state once froze the desktop and returned wrong maps without any error message. "
+                          "If that happens, switch this off and restart the PC.")
         gpu_note.setWordWrap(True)
         gpu_note.setObjectName("muted")
         lay.addWidget(gpu_title)

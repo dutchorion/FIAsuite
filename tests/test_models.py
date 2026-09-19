@@ -35,3 +35,42 @@ def test_trufor_localises_the_splice(tmp_path):
 def test_community_forensics_flags_generated_samples():
     scores = [ai.classify(Evidence(p), REGISTRY["commfor"], max_tiles=1)[0] for p in SAMPLES[:5]]
     assert sum(s > 0.5 for s in scores) >= 4
+
+
+# ------------------------------------------------------------------ GPU self-check (stand-in sessions, no GPU needed)
+
+class _FakeSession:
+    class _Input:
+        name, type = "x", "tensor(float)"
+
+    def __init__(self, transform):
+        self.transform = transform
+
+    def get_inputs(self):
+        return [self._Input()]
+
+    def run(self, _names, feed):
+        return [self.transform(feed["x"].mean(axis=(2, 3)))]
+
+
+ENTRY = {"id": "fake", "name": "Fake", "size": 8}
+
+
+def test_gpu_selfcheck_accepts_matching_results():
+    cpu, gpu = _FakeSession(lambda v: v), _FakeSession(lambda v: v * 1.0001)
+    assert ai.gpu_mismatch(gpu, cpu, ENTRY) is None
+
+
+def test_gpu_selfcheck_rejects_wrong_results():
+    import numpy as np
+    cpu = _FakeSession(lambda v: v)
+    assert "differ" in ai.gpu_mismatch(_FakeSession(lambda v: v * 0.2), cpu, ENTRY)
+    assert "non-finite" in ai.gpu_mismatch(_FakeSession(lambda v: v * np.nan), cpu, ENTRY)
+
+
+def test_gpu_selfcheck_rejects_a_crawling_gpu(monkeypatch):
+    import time
+    ticks = iter([0.0, 1.0, 1.0, 30.0])                      # cpu: 1 s, gpu: 29 s
+    monkeypatch.setattr(time, "perf_counter", lambda: next(ticks))
+    cpu, gpu = _FakeSession(lambda v: v), _FakeSession(lambda v: v)
+    assert "needed 29 s" in ai.gpu_mismatch(gpu, cpu, ENTRY)

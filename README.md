@@ -61,6 +61,24 @@ planes, colour channels (the Forensically tool set).
 - The evidence file is opened read-only and is never modified. Pixels are analysed exactly as stored (no EXIF
   rotation, no colour management) so that maps line up with the JPEG grid and the sensor pattern.
 
+## Getting it onto another PC
+
+| You have | Do this | First start |
+|---|---|---|
+| `FIASuite` folder (full build, 1.2 GB) | copy it, double-click **FIASuite.exe** | works offline straight away |
+| `FIASuite-slim` folder (0.4 GB) | copy it, double-click **FIASuite.exe** | the setup wizard offers to download ExifTool and the models |
+| a git clone / source zip | double-click **FIASuite.bat** | finds Python 3.12 (offers to install it with winget if it is missing), creates a private environment in the folder, installs the packages, starts the program; then the setup wizard as above |
+
+**Setup wizard.** At start-up the program checks for ExifTool and the three models. If something is missing
+it lists each item with its size, source and licence, and installs what you tick: files are downloaded,
+verified against SHA-256 checksums and placed next to the program. Nothing else on the PC is changed. It can
+be reopened any time with **Setup ...** and silenced with "Do not show this at start-up again".
+
+Two of the models are ONNX conversions kept in the release assets of the private repository
+`dutchorion/FIAsuite`. The wizard reaches them through a signed-in GitHub CLI (`gh auth login`), or with a
+read-only access token that you paste once (used for that download only, never stored). ExifTool comes from
+exiftool.org and the SwinV2 detector from Hugging Face; neither needs an account.
+
 ## Folder layout
 
     FIASuite.exe        the program            _internal/     its runtime (do not edit)
@@ -68,32 +86,29 @@ planes, colour channels (the Forensically tool set).
     models/             ONNX detectors + models.json (add or remove detectors here)
     config.json         created when you save settings (holds the API key in plain text)
 
-## Building from source
+## Developing
 
-    python -m venv .venv                            # Python 3.12, Windows
-    .venv\Scripts\pip install -r requirements.txt
-    .venv\Scripts\python -m pytest tests            # ground-truth tests on synthetic forgeries
-    .venv\Scripts\python -m fiasuite                # run from source
-    .venv\Scripts\python tools\build_portable.py    # -> dist\FIASuite
-
-The tests that need the neural models skip themselves while `models/` is empty.
+    FIASuite.bat                                          # or by hand: python -m venv .venv (Python 3.12)
+    .venv\Scripts\pip install -r requirements-dev.txt     # adds pytest and PyInstaller
+    .venv\Scripts\python -m pytest tests                  # ground-truth tests; model tests skip without models
+    .venv\Scripts\python -m fiasuite                      # run from source
+    .venv\Scripts\python tools\build_portable.py         # -> dist\FIASuite (full) and dist\FIASuite-slim
 
 **GPU.** Neural models run on the CPU unless *Settings > Run neural models on the GPU* is ticked. The GPU path
-uses DirectML, which works on NVIDIA, AMD and Intel. It is opt-in because on an AMD integrated GPU it froze
-the desktop and returned wrong TruFor maps; verify GPU results against the CPU before relying on them.
+uses DirectML, which works on NVIDIA, AMD and Intel; on an AMD Radeon 780M it gives the same scores as the CPU
+(differences below 1e-3) about twice as fast. It is opt-in because the same GPU, with a driver in a bad state
+after weeks of uptime, froze the desktop and returned wrong TruFor maps without raising an error. Therefore each
+model is run once on both devices when it is first used on the GPU; on a mismatch, non-finite output or an
+abnormally slow GPU it stays on the CPU for that session and its tool reports why.
 
-Two things are not kept in the repository and must be restored after cloning:
+**Re-creating the models.** `tools/convert_models.py` downloads the original weights and converts them to
+ONNX; it needs a separate environment with PyTorch (the program itself does not):
 
-- **ExifTool**: download the Windows package from https://exiftool.org, rename `exiftool(-k).exe` to
-  `exiftool.exe` and place it together with its `exiftool_files` folder in `vendor/exiftool/`.
-- **Models**: `tools/convert_models.py` downloads the detectors and converts them to ONNX into `models/`.
-  Run it in a separate environment that has PyTorch:
+    python -m venv .venv-convert
+    .venv-convert\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+    .venv-convert\Scripts\pip install timm onnx onnxruntime huggingface_hub safetensors pyyaml yacs numpy
+    git clone https://github.com/grip-unina/TruFor models/_src/TruFor
+    .venv-convert\Scripts\python tools\convert_models.py commfor swinv2 trufor
 
-      python -m venv .venv-convert
-      .venv-convert\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-      .venv-convert\Scripts\pip install timm onnx onnxruntime huggingface_hub safetensors pyyaml yacs numpy
-      git clone https://github.com/grip-unina/TruFor models/_src/TruFor
-      .venv-convert\Scripts\python tools\convert_models.py commfor swinv2 trufor
-
-PyTorch is not needed to run the program, and the program works without models (the AI tools then report
-"not installed").
+After a new conversion, upload the files to a new release tag and update the tag and SHA-256 values in
+`fiasuite/components.py`.

@@ -54,35 +54,84 @@ def load_registry() -> list[dict]:
     return [e for e in entries if (models_dir() / e["file"]).exists()]
 
 
-def _session(entry: dict):
+gpu_problems: dict[str, str] = {}              # model id -> why it was taken off the GPU in this session
+
+
+def _cpu_session(entry: dict):
     import os
 
     import onnxruntime as ort
+    opts = ort.SessionOptions()
+    opts.log_severity_level = 3
+    opts.intra_op_num_threads = max(1, (os.cpu_count() or 4) // 2)    # leave half the cores to the desktop
+    basic = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    if entry.get("cpu_optimization") == "basic":
+        opts.graph_optimization_level = basic
+    path = str(models_dir() / entry["file"])
+    try:
+        return ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+    except Exception:                              # ORT's extended fusions fail on some fp16 graphs on the CPU
+        opts.graph_optimization_level = basic
+        return ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+
+
+def gpu_mismatch(gpu_sess, cpu_sess, entry: dict) -> str | None:
+    """One test inference on both devices. A GPU driver in a bad state has returned plausible-looking but wrong
+    maps, many times slower than normal, without raising any error: a forensic tool must not trust it blindly."""
+    import time
+    meta = cpu_sess.get_inputs()[0]
+    rng = np.random.default_rng(0)
+    size = int(entry["size"])
+    x = rng.random((1, 3, size, size), dtype=np.float32)
+    x = x.astype(np.float16) if "float16" in meta.type else x
+    t = time.perf_counter()
+    expected = _run(cpu_sess, {meta.name: x})
+    t_cpu = time.perf_counter() - t
+    t = time.perf_counter()
+    got = _run(gpu_sess, {meta.name: x})
+    t_gpu = time.perf_counter() - t
+    for e, g in zip(expected, got):
+        e, g = np.asarray(e, np.float64), np.asarray(g, np.float64)
+        if not np.isfinite(g).all():
+            return "the GPU returned non-finite values"
+        worst = float(np.abs(e - g).max() / max(np.abs(e).max(), 1e-6))
+        if worst > 0.02:
+            return f"GPU and CPU results differ by {worst:.0%}"
+    if t_gpu > 5 * t_cpu + 5:
+        return f"the GPU needed {t_gpu:.0f} s for what the CPU does in {t_cpu:.0f} s"
+    return None
+
+
+def _session(entry: dict):
     gpu = use_gpu()
     key = f"{entry['id']}|{'gpu' if gpu else 'cpu'}"
     with _lock:
         if key not in _sessions:
-            path = str(models_dir() / entry["file"])
-            opts = ort.SessionOptions()
-            opts.log_severity_level = 3
-            opts.intra_op_num_threads = max(1, (os.cpu_count() or 4) // 2)    # leave half the cores to the desktop
-            basic = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
-            if not gpu and entry.get("cpu_optimization") == "basic":
-                opts.graph_optimization_level = basic
-            sess = None
+            sess = _cpu_session(entry)
             if gpu:
+                import onnxruntime as ort
+                opts = ort.SessionOptions()
+                opts.log_severity_level = 3
                 try:
-                    sess = ort.InferenceSession(path, opts, providers=["DmlExecutionProvider", "CPUExecutionProvider"])
-                except Exception:
-                    sess = None
-            if sess is None:
-                try:
-                    sess = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
-                except Exception:                  # ORT's extended fusions fail on some fp16 graphs on the CPU
-                    opts.graph_optimization_level = basic
-                    sess = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+                    candidate = ort.InferenceSession(str(models_dir() / entry["file"]), opts,
+                                                     providers=["DmlExecutionProvider", "CPUExecutionProvider"])
+                    problem = gpu_mismatch(candidate, sess, entry)
+                except Exception as exc:
+                    candidate, problem = None, f"the GPU could not run the model ({str(exc)[:120]})"
+                if problem is None:
+                    sess = candidate
+                    gpu_problems.pop(entry["id"], None)
+                else:
+                    gpu_problems[entry["id"]] = problem
             _sessions[key] = sess
         return _sessions[key]
+
+
+def _gpu_note(res: Result, entry: dict) -> None:
+    if entry["id"] in gpu_problems:
+        res.findings.append(Finding(NOTE, f"{entry['name']} ran on the CPU instead of the GPU",
+            f"Self-check failed: {gpu_problems[entry['id']]}. This points to a graphics-driver problem; restarting "
+            "the PC has cured it before. The result shown here was computed on the CPU and is not affected."))
 
 
 def _prepare(bgr: np.ndarray, entry: dict) -> np.ndarray:
@@ -156,6 +205,7 @@ def detect(ev: Evidence, max_tiles: int = 24) -> Result:
         except Exception as exc:
             res.findings.append(Finding(NOTE, f"{entry['name']} failed", str(exc)[:300]))
             continue
+        _gpu_note(res, entry)
         scores.append(score)
         weights.append(float(entry.get("weight", 1.0)))
         res.metrics[entry["id"]] = score
@@ -196,6 +246,7 @@ def localize(ev: Evidence, max_side: int = 1600) -> Result:
             f"Place the TruFor ONNX export and its models.json entry in {models_dir()}."))
         return res
     sess = _session(entry)
+    _gpu_note(res, entry)
     img = ev.bgr
     scale = min(1.0, max_side / max(ev.height, ev.width))
     if scale < 1:

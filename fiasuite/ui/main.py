@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDockWidget, 
                                QTableWidgetItem, QTextBrowser, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                                QWidget)
 
-from .. import APP_NAME, __version__
+from .. import APP_NAME, __version__, components
 from ..analyses import online
 from ..core import IMAGE_EXTS, SEVERITY_ORDER, Evidence, Result
 from ..tools import TOOLS, Tool, defaults
@@ -254,6 +254,7 @@ class MainWindow(QMainWindow):
         self.btn_reverse = button("Reverse image search", menu=menu,
                                   tip="Copies the image to the clipboard and opens the search page: press Ctrl+V there")
         button("Settings ...", self.open_settings)
+        button("Setup ...", self.open_setup, tip="Install ExifTool and the neural models")
         self.addAction(QAction(self, shortcut=QKeySequence.Open, triggered=self.open_dialog))
 
     def _build_tree(self):
@@ -649,6 +650,18 @@ class MainWindow(QMainWindow):
         self._calibration = CalibrationWindow(self)
         self._calibration.show()
 
+    def open_setup(self, first_run: bool = False):
+        from .setup_wizard import SetupWizard
+        before = len(components.missing())
+        SetupWizard(self, first_run=bool(first_run)).exec()
+        if self.ev is not None and len(components.missing()) < before:
+            self.scan()                              # newly installed tools apply to the open image
+
+    def first_run_check(self):
+        """Offer the setup wizard at start-up while components are missing, unless the user opted out."""
+        if components.missing() and not online.load_config().get("setup_skip", False):
+            self.open_setup(first_run=True)
+
     def open_settings(self):
         from .dialogs import SettingsDialog
         SettingsDialog(self).exec()
@@ -657,7 +670,7 @@ class MainWindow(QMainWindow):
 def selftest(image: str, out: str) -> int:
     """Headless check of a build: run every automatic tool once and write the scores as JSON."""
     import json
-    ev, report = Evidence(image), {}
+    ev, report = Evidence(image), {"_components_missing": [c.id for c in components.missing()]}
     for tool in TOOLS:
         if tool.auto:
             try:
@@ -669,14 +682,31 @@ def selftest(image: str, out: str) -> int:
     return 0
 
 
+def headless_install(ids: str, out: str) -> int:
+    """Build verification: install components (comma-separated ids) without the GUI, report as JSON."""
+    import json
+    report = {}
+    for cid in ids.split(","):
+        try:
+            components.install(components.BY_ID[cid], lambda *a: None, lambda: False)
+            report[cid] = "installed"
+        except Exception as exc:
+            report[cid] = f"failed: {exc}"
+    Path(out).write_text(json.dumps(report, indent=1), encoding="utf-8")
+    return 0
+
+
 def run(argv: list[str]) -> int:
     if len(argv) == 4 and argv[1] == "--selftest":
         return selftest(argv[2], argv[3])
+    if len(argv) == 4 and argv[1] == "--install":
+        return headless_install(argv[2], argv[3])
     app = QApplication(argv)
     app.setApplicationName(APP_NAME)
     theme.apply(app)
     win = MainWindow()
     win.show()
+    QTimer.singleShot(300, win.first_run_check)
     files = [a for a in argv[1:] if Path(a).is_file()]
     if files:
         QTimer.singleShot(0, lambda: win.open_file(files[0]))

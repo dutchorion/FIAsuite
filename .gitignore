@@ -1,0 +1,19 @@
+# environments and build output
+.venv/
+.venv-convert/
+build/
+dist/
+build_log.txt
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# holds API keys in plain text
+config.json
+
+# third-party binaries and model weights are not versioned:
+#   vendor/exiftool      <- portable ExifTool (exiftool.exe + exiftool_files), see README
+#   models/*.onnx        <- produced by tools/convert_models.py
+vendor/
+models/*.onnx
+models/_src/

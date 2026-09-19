@@ -1,0 +1,56 @@
+[
+  {
+    "id": "commfor",
+    "name": "Community Forensics ViT-S/384",
+    "file": "commfor_vits16_384.onnx",
+    "kind": "classifier",
+    "size": 384,
+    "resize": 440,
+    "policy": "resize_crop",
+    "output": "sigmoid",
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "license": "MIT",
+    "source": "https://huggingface.co/OwensLab/commfor-model-384"
+  },
+  {
+    "id": "swinv2",
+    "name": "SwinV2 AI-image detector",
+    "file": "swinv2_detector_fp16.onnx",
+    "kind": "classifier",
+    "size": 256,
+    "policy": "squash",
+    "output": "softmax",
+    "fake_index": 0,
+    "weight": 0.5,
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "license": "Apache-2.0",
+    "source": "https://huggingface.co/haywoodsloan/ai-image-detector-deploy (ONNX: LPX55/detection-model-1-ONNX)"
+  },
+  {
+    "id": "trufor",
+    "name": "TruFor",
+    "file": "trufor_1024.onnx",
+    "kind": "localizer",
+    "size": 1024,
+    "license": "GRIP-UNINA research licence (non-commercial)",
+    "source": "https://github.com/grip-unina/TruFor"
+  }
+]

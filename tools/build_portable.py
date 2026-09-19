@@ -19,6 +19,9 @@ def folder_mb(path: Path) -> float:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) / 2 ** 20
 
 
+# PyInstaller wipes the output folders: carry the user's settings (API keys) over the rebuild
+saved = {d: (d / "config.json").read_bytes() for d in (FULL, SLIM) if (d / "config.json").exists()}
+
 subprocess.check_call([
     sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", "FIASuite",
     "--icon", str(ROOT / "assets" / "fiasuite.ico"),
@@ -45,5 +48,8 @@ for folder in ("vendor", "models"):
     if (ROOT / folder).exists():
         shutil.copytree(ROOT / folder, FULL / folder, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("_src"))     # model sources / raw weights stay out of the release
+
+for folder, data in saved.items():
+    (folder / "config.json").write_bytes(data)
 
 print(f"\nSlim build: {SLIM}  ({folder_mb(SLIM):.0f} MB)\nFull build: {FULL}  ({folder_mb(FULL):.0f} MB)")

@@ -24,8 +24,9 @@ Dots in the tool list: green = nothing found, yellow = note, orange = suspicious
 | Compare | Align a second version of the picture onto this one: difference map, changed regions, metadata diff, noise spectra side by side |
 | Batch triage | Screen a whole folder, sort by suspicion, double-click to open, export CSV |
 | Calibrate | Measure a detector on **your own** authentic and manipulated images (AUC, detection rate at 1 % and 5 % false alarms), also after "laundering" such as `resize0.5+jpeg75` |
-| Export report | HTML or PDF case report (hashes, parameters, findings, maps) and a JSON record for machines |
+| Export report | HTML or PDF case report (hashes, parameters, findings, maps) and a JSON record for machines. The PDF is laid out on A4: every image is fitted to the column, none is split across pages, each page carries the file name, hash and page number |
 | Reverse image search | Copies the image to the clipboard and opens Google Lens / TinEye / Bing / Yandex: press Ctrl+V there |
+| Watermark check | Same clipboard hand-over for provenance checks that only exist as web pages: Google Gemini and the SynthID Detector portal (Google's SynthID watermark), OpenAI's verify page |
 | Settings | API key for the optional online detector |
 
 ## The tools
@@ -49,7 +50,7 @@ localisation with reliability map; spectral fingerprint of the noise residual wi
 **Visual inspection** - Magnifier enhancement, luminance gradient, principal components, level sweep, bit
 planes, colour channels (the Forensically tool set).
 
-**Online (optional)** - Sightengine AI detection with per-generator scores. Uploads only on your click.
+**Online (optional)** - Sightengine AI detection with per-generator scores; OpenAI provenance check (OpenAI's Content Credentials and its invisible SynthID watermark, which survives screenshots and recompression, for content made with OpenAI tools only). Both need your own API key under Settings and upload only on your click. Google offers no public API for its SynthID image watermark, hence the *Watermark check* menu.
 
 ## Reading the results honestly
 

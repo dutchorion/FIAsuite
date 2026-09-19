@@ -26,10 +26,26 @@ from .worker import Job, Signals
 REVERSE_SEARCH = {"Google Lens": "https://lens.google.com/", "TinEye": "https://tineye.com/",
                   "Bing Visual Search": "https://www.bing.com/visualsearch", "Yandex Images": "https://yandex.com/images/"}
 
+# sites without a usable API: the image goes on the clipboard and the page opens; the user pastes it there
+PROVENANCE_SITES = {
+    "Google Gemini (checks for Google's SynthID watermark)": (
+        "https://gemini.google.com/app",
+        "paste the image with Ctrl+V and ask:  Was this image created or edited with Google AI?\n\n"
+        "Gemini looks for Google's invisible SynthID watermark. It recognises content from Google's own tools only."),
+    "Google SynthID Detector (portal, access by waitlist)": (
+        "https://deepmind.google/models/synthid/",
+        "open the SynthID Detector from this page (journalists and researchers can join the waitlist) and paste or "
+        "upload the image there."),
+    "OpenAI verify page (no API key needed)": (
+        "https://openai.com/research/verify/",
+        "paste or upload the image. The page checks for OpenAI's Content Credentials and SynthID watermark, the same "
+        "check as the 'OpenAI provenance check' tool."),
+}
+
 ONLINE_TOOLS = [Tool(f"online:{name}", f"{name} (online)", "Online services", fn,
-                     f"Uploads the image to {name} and returns its AI-generation verdict. Nothing is sent until you "
-                     "press the button. Configure the API key under Settings.", axis="ai", weight=1.2, manual=True)
-                for name, fn in online.PROVIDERS.items()]
+                     f"{about} Nothing is sent until you press the button; the API key is set under Settings.",
+                     axis="ai", weight=1.2, manual=True)
+                for name, (fn, about) in online.PROVIDERS.items()]
 ALL_TOOLS = TOOLS + ONLINE_TOOLS
 
 
@@ -56,17 +72,19 @@ def result_color(res: Result | None) -> str:
 
 class Card(QFrame):
     clicked = Signal(str)
+    SIDE = 250
+    THUMB = (228, 146)                                          # box the preview is fitted into
 
     def __init__(self, tool: Tool):
         super().__init__()
         self.setObjectName("card")
         self.tool_id = tool.id
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(250, 232)
+        self.setFixedSize(self.SIDE, self.SIDE)                  # square
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
         self.thumb = QLabel()
-        self.thumb.setFixedSize(228, 128)
+        self.thumb.setFixedSize(*self.THUMB)
         self.thumb.setAlignment(Qt.AlignCenter)
         self.thumb.setStyleSheet(f"background:{theme.BG}; border-radius:6px; color:{theme.MUTED};")
         self.title = QLabel(tool.title)
@@ -90,7 +108,13 @@ class Card(QFrame):
             return
         if res.views:
             view = next(iter(res.views.values()))
-            pix = to_pixmap(cv2.resize(view, (228, 128), interpolation=cv2.INTER_AREA))
+            # fit inside the box with the original aspect ratio (letterboxed), at the screen's pixel density
+            dpr = self.devicePixelRatioF()
+            h, w = view.shape[:2]
+            scale = min(self.THUMB[0] * dpr / w, self.THUMB[1] * dpr / h)
+            size = (max(1, round(w * scale)), max(1, round(h * scale)))
+            pix = to_pixmap(cv2.resize(view, size, interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR))
+            pix.setDevicePixelRatio(dpr)
             self.thumb.setPixmap(pix)
         else:                                      # text-only tool: show its findings instead of a picture
             lines = [f.title for f in sorted(res.findings, key=lambda f: -SEVERITY_ORDER[f.severity])[:4]]
@@ -253,6 +277,11 @@ class MainWindow(QMainWindow):
             menu.addAction(name, lambda url=url, name=name: self.reverse_search(name, url))
         self.btn_reverse = button("Reverse image search", menu=menu,
                                   tip="Copies the image to the clipboard and opens the search page: press Ctrl+V there")
+        marks = QMenu(self)
+        for name, (url, how) in PROVENANCE_SITES.items():
+            marks.addAction(name, lambda url=url, name=name, how=how: self.open_site_with_image(name, url, how))
+        self.btn_marks = button("Watermark check", menu=marks,
+                                tip="Google SynthID and OpenAI provenance checks that only exist as web pages")
         button("Settings ...", self.open_settings)
         button("Setup ...", self.open_setup, tip="Install ExifTool and the neural models")
         self.addAction(QAction(self, shortcut=QKeySequence.Open, triggered=self.open_dialog))
@@ -371,7 +400,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
     def _set_enabled(self, on: bool):
-        for w in (self.btn_scan, self.btn_compare, self.btn_report, self.btn_reverse):
+        for w in (self.btn_scan, self.btn_compare, self.btn_report, self.btn_reverse, self.btn_marks):
             w.setEnabled(on)
 
     # ------------------------------------------------------------------ loading
@@ -621,13 +650,17 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ toolbar actions
     def reverse_search(self, name: str, url: str):
+        self.open_site_with_image(name, url, "click the image-search box and press Ctrl+V.")
+
+    def open_site_with_image(self, name: str, url: str, how: str):
+        """Clipboard hand-over for services without an API. The pixels are copied, not the file: metadata does not
+        travel, a pixel watermark does."""
         if self.ev is None:
             return
         QApplication.clipboard().setPixmap(to_pixmap(self.ev.bgr))
         webbrowser.open(url)
-        QMessageBox.information(self, APP_NAME, f"The image is on the clipboard.\n\nIn the {name} page that just opened, "
-                                "click the image-search box and press Ctrl+V. The picture is uploaded to that service "
-                                "only when you paste it.")
+        QMessageBox.information(self, APP_NAME, f"The image is on the clipboard and {name.split(' (')[0]} is opening.\n\n"
+                                f"There, {how}\n\nThe picture reaches that service only when you paste it.")
 
     def export_report(self):
         from .dialogs import ReportDialog

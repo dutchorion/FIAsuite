@@ -11,9 +11,22 @@ REGISTRY = {e["id"]: e for e in ai.load_registry()}
 SAMPLES = sorted((ai.models_dir() / "_src" / "Community-Forensics" / "test_images").glob("*.png"))
 
 
-def test_inference_defaults_to_cpu():
-    """GPU (DirectML) inference froze a PC with integrated graphics: it must stay opt-in."""
+@pytest.fixture(autouse=True)
+def cpu_only(monkeypatch):
+    """The tests must not depend on the settings of whoever runs them (config.json may enable the GPU)."""
+    monkeypatch.setattr(ai, "use_gpu", lambda: False)
+
+
+def test_gpu_is_opt_in(tmp_path, monkeypatch):
+    """GPU (DirectML) inference froze a PC with integrated graphics: without a saved setting it must stay off."""
+    monkeypatch.undo()                                        # look at the real function
+    monkeypatch.setattr(ai, "app_dir", lambda: tmp_path)      # a fresh installation: no config.json
     assert ai.use_gpu() is False
+    (tmp_path / "config.json").write_text('{"use_gpu": true}', encoding="utf-8")
+    assert ai.use_gpu() is True
+
+
+def test_cpu_sessions_when_gpu_is_off():
     for entry in REGISTRY.values():
         assert ai._session(entry).get_providers() == ["CPUExecutionProvider"]
 

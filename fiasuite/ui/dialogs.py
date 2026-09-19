@@ -6,9 +6,8 @@ import html
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QMarginsF, Qt, QThreadPool
-from PySide6.QtGui import QColor, QPageLayout, QPageSize, QTextDocument
-from PySide6.QtPrintSupport import QPrinter
+from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
                                QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget)
@@ -16,7 +15,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 from .. import APP_NAME, calibrate, launder
 from ..analyses import compare, online
 from ..core import IMAGE_EXTS, SEVERITY_ORDER, Evidence
-from ..report import build_html, build_json
+from ..report import build_html, build_json, write_pdf
 from ..tools import BY_ID, TOOLS, defaults
 from ..verdict import summarize
 from . import theme
@@ -66,20 +65,12 @@ class ReportDialog(QDialog):
         online.save_config(cfg)
         args = (ev, self.main.results, summarize(self.main.results), self.main.params,
                 self.examiner.text(), self.notes.toPlainText())
-        doc = build_html(*args) if kind != "json" else ""
         if kind == "json":
             Path(target).write_text(json.dumps(build_json(*args), indent=1, ensure_ascii=False), encoding="utf-8")
         elif kind == "html":
-            Path(target).write_text(doc, encoding="utf-8")
+            Path(target).write_text(build_html(*args), encoding="utf-8")
         else:
-            printer = QPrinter(QPrinter.HighResolution)
-            printer.setOutputFormat(QPrinter.PdfFormat)
-            printer.setOutputFileName(target)
-            printer.setPageLayout(QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Portrait, QMarginsF(14, 14, 14, 14),
-                                              QPageLayout.Millimeter))
-            text = QTextDocument()
-            text.setHtml(doc)
-            text.print_(printer)
+            write_pdf(target, *args)
         self.accept()
         QMessageBox.information(self.main, APP_NAME, f"Report saved to\n{target}")
 
@@ -398,7 +389,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(520, 420)
+        self.resize(540, 600)
         self.cfg = online.load_config()
         se = self.cfg.get("sightengine", {})
         lay = QVBoxLayout(self)
@@ -418,6 +409,20 @@ class SettingsDialog(QDialog):
         lay.addWidget(title)
         lay.addWidget(note)
         lay.addLayout(form)
+        oa_title = QLabel("OpenAI provenance check (optional)")
+        oa_title.setObjectName("h2")
+        oa_note = QLabel("Checks for OpenAI's Content Credentials and SynthID watermark. Needs an API key from "
+                         "platform.openai.com; it is stored in plain text in config.json. The service is strictly "
+                         "rate-limited and uploads are not covered by OpenAI's zero-data-retention option.")
+        oa_note.setWordWrap(True)
+        oa_note.setObjectName("muted")
+        self.openai_key = QLineEdit(self.cfg.get("openai", {}).get("api_key", ""))
+        self.openai_key.setEchoMode(QLineEdit.Password)
+        oa_form = QFormLayout()
+        oa_form.addRow("API key", self.openai_key)
+        lay.addWidget(oa_title)
+        lay.addWidget(oa_note)
+        lay.addLayout(oa_form)
         gpu_title = QLabel("Neural models")
         gpu_title.setObjectName("h2")
         self.gpu = QCheckBox("Run neural models on the GPU (DirectML)")
@@ -440,6 +445,7 @@ class SettingsDialog(QDialog):
 
     def save(self):
         self.cfg["sightengine"] = {"api_user": self.user.text().strip(), "api_secret": self.secret.text().strip()}
+        self.cfg["openai"] = {"api_key": self.openai_key.text().strip()}
         self.cfg["use_gpu"] = self.gpu.isChecked()
         online.save_config(self.cfg)
         self.accept()

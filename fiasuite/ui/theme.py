@@ -8,7 +8,8 @@ SEVERITY_COLORS = {"info": "#8b8d98", "note": "#f5d90a", "warn": "#f76b15", "ale
 
 STYLE = f"""
 QWidget {{ background: {BG}; color: {TEXT}; font-family: 'Segoe UI'; font-size: 10pt; }}
-QMainWindow::separator {{ background: {BORDER}; width: 1px; height: 1px; }}
+QMainWindow::separator {{ background: {BORDER}; width: 5px; height: 5px; }}
+QMainWindow::separator:hover {{ background: {ACCENT}; }}
 QToolBar {{ background: {PANEL}; border-bottom: 1px solid {BORDER}; padding: 4px; spacing: 4px; }}
 QToolButton {{ background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 6px 12px; }}
 QToolButton:hover {{ background: {RAISED}; border-color: {BORDER}; }}
@@ -43,6 +44,9 @@ QCheckBox {{ background: transparent; spacing: 8px; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border: 1px solid #5a5d66; border-radius: 4px; background: {RAISED}; }}
 QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; image: none; }}
 QCheckBox::indicator:disabled {{ border-color: {BORDER}; }}
+QListWidget::item {{ padding: 4px 2px; }}
+QListWidget::indicator {{ width: 15px; height: 15px; border: 1px solid #5a5d66; border-radius: 4px; background: {RAISED}; }}
+QListWidget::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
 QSplitter::handle {{ background: {BORDER}; }}
 QToolTip {{ background: {RAISED}; color: {TEXT}; border: 1px solid {BORDER}; }}
 """

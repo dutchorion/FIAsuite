@@ -1,4 +1,8 @@
-"""Case report: self-contained HTML, a paginated PDF with fitted, unbroken images, and a JSON record."""
+"""Case report: self-contained HTML, a paginated PDF, and a JSON record.
+
+PDF rules: every analysis starts on a new page; a page that continues a section carries
+"<section> (continued)" at the top; images are fitted to the column and never split across pages.
+"""
 from __future__ import annotations
 
 import base64
@@ -15,8 +19,20 @@ from .tools import BY_ID, TOOLS
 from .verdict import AxisVerdict, headline
 
 
+def ordered(results: dict[str, Result], include=None) -> list[str]:
+    """Tool ids in report order, limited to `include` when given."""
+    order = [t.id for t in TOOLS] + [k for k in results if k not in BY_ID]
+    return [k for k in order if k in results and (include is None or k in include)]
+
+
+def title_of(tool_id: str) -> str:
+    if tool_id in BY_ID:
+        return BY_ID[tool_id].title
+    return tool_id.split(":", 1)[1] + " (online)" if tool_id.startswith("online:") else tool_id
+
+
 def build_json(ev: Evidence, results: dict[str, Result], verdicts: dict[str, AxisVerdict], params: dict[str, dict],
-               examiner: str = "", notes: str = "") -> dict:
+               examiner: str = "", notes: str = "", include=None) -> dict:
     """Machine-readable record of the examination: parameters, measurements and findings of every tool run."""
     return {
         "application": APP_NAME, "version": __version__, "generated": datetime.now().isoformat(timespec="seconds"),
@@ -25,24 +41,30 @@ def build_json(ev: Evidence, results: dict[str, Result], verdicts: dict[str, Axi
         "verdicts": {axis: {"label": v.label, "level": v.level, "combined_score": round(v.score, 4), "tools_run": v.tools_run}
                      for axis, v in verdicts.items()},
         "calibrated": False,       # scores are screening aids until measured with the calibration tool
-        "tools": {tool_id: {"parameters": params.get(tool_id, {}), "score": res.score, "metrics": res.metrics,
-                            "findings": [{"severity": f.severity, "title": f.title, "detail": f.detail} for f in res.findings],
-                            "table": [[str(k), str(v)] for k, v in res.table]}
-                  for tool_id, res in results.items()},
+        "tools": {tool_id: {"parameters": params.get(tool_id, {}), "score": results[tool_id].score,
+                            "metrics": results[tool_id].metrics,
+                            "findings": [{"severity": f.severity, "title": f.title, "detail": f.detail}
+                                         for f in results[tool_id].findings],
+                            "table": [[str(k), str(v)] for k, v in results[tool_id].table]}
+                  for tool_id in ordered(results, include)},
     }
 
 
 _SEV = {"info": "#6b7280", "note": "#b58900", "warn": "#d9480f", "alert": "#c92a2a"}
 _DPI = 96.0                                    # CSS pixels per inch: the unit the PDF page is laid out in
 _SOFT = re.compile(r"(\S{28})(?=\S)")         # long hashes and paths need break opportunities to stay inside a table
+_BLANK = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+_BREAK = ' style="page-break-before:always"'
 
 
-def _img_tag(bgr: np.ndarray, max_w: int, max_h: int | None = None, density: float = 1.0) -> str:
-    """<img> scaled to fit max_w x max_h (never enlarged), aspect ratio kept. `density` stores more
-    pixels than the display size so that print stays sharp."""
+def _img_tag(bgr: np.ndarray, max_w: int, max_h: int | None = None, density: float = 1.0, placeholder: bool = False) -> str:
+    """<img> scaled to fit max_w x max_h (never enlarged), aspect ratio kept. `density` stores more pixels than
+    the display size so that print stays sharp. placeholder: same box, no pixel data (fast layout measuring)."""
     h, w = bgr.shape[:2]
     scale = min(1.0, max_w / w, (max_h / h) if max_h else 1.0)
     dw, dh = max(1, round(w * scale)), max(1, round(h * scale))
+    if placeholder:
+        return f'<img src="{_BLANK}" width="{dw}" height="{dh}">'
     store = min(1.0, scale * density)
     if store < 1.0:
         bgr = cv2.resize(bgr, (max(1, round(w * store)), max(1, round(h * store))), interpolation=cv2.INTER_AREA)
@@ -51,57 +73,74 @@ def _img_tag(bgr: np.ndarray, max_w: int, max_h: int | None = None, density: flo
 
 
 def build_html(ev: Evidence, results: dict[str, Result], verdicts: dict[str, AxisVerdict], params: dict[str, dict],
-               examiner: str = "", notes: str = "", page: tuple[float, float] | None = None) -> str:
-    """page=None: a web page. page=(width, height) in CSS pixels: laid out for that PDF page, every image
-    fits the column and is short enough to share a page with its heading and caption."""
+               examiner: str = "", notes: str = "", include=None, page: tuple[float, float] | None = None,
+               breaks: dict | None = None, placeholder: bool = False) -> str:
+    """page=None: a web page. page=(width, height) in CSS pixels: the PDF layout, where every analysis starts a new
+    page. breaks (found by layout_pdf) numbers the blocks that need a different treatment: "image" / "heading" get a
+    page break before them, "flow" headings lose their forced break because they already flow onto a new page."""
+    breaks = breaks or {}
+    image_breaks, heading_breaks, flow = (breaks.get(k, ()) for k in ("image", "heading", "flow"))
     pdf = page is not None
     img_w = int(page[0]) - 2 if pdf else 860
     img_h = int(page[1] * 0.72) if pdf else None
     density = 2.0 if pdf else 1.0
+    counters = {"image": 0, "heading": 0}
 
     def e(text) -> str:
         text = html.escape(str(text))
         return _SOFT.sub("\\1&#8203;", text) if pdf else text
 
-    body = "margin:0" if pdf else "margin:32px;max-width:920px"
-    out = [f"""<html><head><meta charset="utf-8"><title>{e(ev.path.name)} - forensic image report</title>
-<style>body{{font-family:Segoe UI,Arial,sans-serif;color:#1c1c1c;font-size:9.5pt;{body}}}
-h1{{font-size:18pt;margin-bottom:0}} h2{{font-size:13pt;margin-top:22px;margin-bottom:6px}}
-h3{{font-size:11pt;margin-top:16px;margin-bottom:3px}} table{{border-collapse:collapse;width:100%;font-size:8.5pt}}
-td{{border:1px solid #bbb;padding:3px 6px;vertical-align:top;word-break:break-all}} td.k{{background:#f0f0f0}}
-img{{max-width:100%;height:auto}} .small{{color:#666;font-size:8.5pt}} .f{{margin:3px 0}}</style></head><body>
-<h1>Forensic image analysis report</h1>
-<p class="small">{APP_NAME} {__version__} &middot; generated {datetime.now():%Y-%m-%d %H:%M:%S}{' &middot; examiner: ' + e(examiner) if examiner else ''}</p>
-<h2>Evidence</h2>"""]
+    def heading(level: int, text: str, new_page: bool = False) -> str:
+        index = counters["heading"]
+        counters["heading"] += 1
+        forced = pdf and (new_page or index in heading_breaks) and index not in flow
+        style = ' style="page-break-before:always;margin-top:0"' if forced else ""
+        return f"<h{level}{style}>{e(text)}</h{level}>"
+
+    def image(bgr: np.ndarray, caption: str = "", max_w: int | None = None, max_h: int | None = None) -> str:
+        index = counters["image"]
+        counters["image"] += 1
+        style = _BREAK if index in image_breaks else ""
+        tag = _img_tag(bgr, max_w or img_w, max_h or img_h, density, placeholder)
+        return f'<p{style}>{tag}' + (f'<br><span class="small">{e(caption)}</span>' if caption else "") + "</p>"
 
     def table(rows) -> str:
         cells = "".join(f'<tr><td class="k" width="30%">{k}</td><td width="70%">{v}</td></tr>' for k, v in rows)
         return f'<table width="100%" cellspacing="0" cellpadding="3">{cells}</table>'
 
-    out.append(table([("File", e(ev.path)), ("Size", f"{len(ev.data):,} bytes &middot; {ev.width} x {ev.height} px"),
-                      *[(k.upper(), e(v)) for k, v in ev.hashes.items()]]))
-    out.append(f"<p>{_img_tag(ev.bgr, min(img_w, 520), img_h and min(img_h, 420), density)}</p>")
+    body = "margin:0" if pdf else "margin:32px;max-width:920px"
+    out = [f"""<html><head><meta charset="utf-8"><title>{e(ev.path.name)} - forensic image report</title>
+<style>body{{font-family:Segoe UI,Arial,sans-serif;color:#1c1c1c;font-size:9.5pt;{body}}}
+h1{{font-size:18pt;margin-bottom:0}} h2{{font-size:13pt;margin-top:20px;margin-bottom:6px}}
+table{{border-collapse:collapse;width:100%;font-size:8.5pt}}
+td{{border:1px solid #bbb;padding:3px 6px;vertical-align:top;word-break:break-all}} td.k{{background:#f0f0f0}}
+img{{max-width:100%;height:auto}} .small{{color:#666;font-size:8.5pt}} .f{{margin:3px 0}}</style></head><body>""",
+           heading(1, "Forensic image analysis report"),
+           f'<p class="small">{APP_NAME} {__version__} &middot; generated {datetime.now():%Y-%m-%d %H:%M:%S}'
+           f'{" &middot; examiner: " + e(examiner) if examiner else ""}</p>',
+           heading(2, "Evidence"),
+           table([("File", e(ev.path)), ("Size", f"{len(ev.data):,} bytes &middot; {ev.width} x {ev.height} px"),
+                  *[(k.upper(), e(v)) for k, v in ev.hashes.items()]]),
+           image(ev.bgr, "", min(img_w, 520), 420)]
     if notes:
-        out.append(f"<h2>Examiner notes</h2><p>{e(notes).replace(chr(10), '<br>')}</p>")
+        out += [heading(2, "Examiner notes"), f"<p>{e(notes).replace(chr(10), '<br>')}</p>"]
 
-    out.append(f"<h2>Summary</h2><p>{e(headline(verdicts))}</p>")
+    out += [heading(2, "Summary"), f"<p>{e(headline(verdicts))}</p>"]
     rows = []
     for v in verdicts.values():
         reasons = "<br>".join(f'<span style="color:{_SEV[s]}">&#9632;</span> {e(tool)}: {e(title)}' for s, tool, title in v.reasons[:6])
         rows.append((f'<b>{e(v.label)}</b><br><span style="color:{v.color}"><b>{e(v.level)}</b></span>'
                      f'<br><span class="small">combined score {v.score:.2f} from {v.tools_run} tools</span>', reasons or "-"))
-    out.append(table(rows))
-    out.append("<p class='small'>Scores are screening aids, not probabilities of forgery. Every finding must be "
-               "reviewed by the examiner; absence of findings does not establish authenticity.</p>")
+    selected = ordered(results, include)
+    out += [table(rows),
+            "<p class='small'>Scores are screening aids, not probabilities of forgery. Every finding must be reviewed by "
+            "the examiner; absence of findings does not establish authenticity.</p>",
+            f"<p class='small'>Analyses in this report ({len(selected)} of {len(results)} run): "
+            + e(", ".join(title_of(k) for k in selected)) + "</p>"]
 
-    out.append("<h2>Analyses</h2>")
-    order = [t.id for t in TOOLS] + [k for k in results if k not in BY_ID]
-    for tool_id in order:
-        res = results.get(tool_id)
-        if res is None:
-            continue
-        tool = BY_ID.get(tool_id)
-        out.append(f"<h3>{e(tool.title if tool else tool_id)}</h3>")
+    for tool_id in selected:
+        res, tool = results[tool_id], BY_ID.get(tool_id)
+        out.append(heading(2, title_of(tool_id), new_page=True))
         if tool:
             used = ", ".join(f"{k}={v}" for k, v in params.get(tool_id, {}).items())
             out.append(f'<p class="small">{e(tool.help)}{" Parameters: " + e(used) if used else ""}</p>')
@@ -111,7 +150,7 @@ img{{max-width:100%;height:auto}} .small{{color:#666;font-size:8.5pt}} .f{{margi
             out.append(f'<p class="f"><span style="color:{_SEV[f.severity]}"><b>[{f.severity.upper()}]</b></span> '
                        f'<b>{e(f.title)}</b><br>{e(f.detail).replace(chr(10), "<br>")}</p>')
         for name, view in list(res.views.items())[:2]:
-            out.append(f'<p>{_img_tag(view, img_w, img_h, density)}<br><span class="small">{e(name)}</span></p>')
+            out.append(image(view, name))
         shown = res.table[:40] if tool_id not in ("metadata",) else res.table[:400]
         if shown:
             out.append(table([(e(k), e(str(v)[:1500])) for k, v in shown]))
@@ -121,63 +160,111 @@ img{{max-width:100%;height:auto}} .small{{color:#666;font-size:8.5pt}} .f{{margi
 
 # ------------------------------------------------------------------ PDF
 
-def layout_pdf(html_for_page, page_mm: tuple[float, float] = (210, 297), margin_mm: float = 15, footer_px: float = 26):
-    """Lay the report out on real pages. Returns (document, page width, page height) in CSS pixels.
-    html_for_page(width, height) -> HTML. Qt's rich-text engine has no 'keep together', so after the layout
-    every block that holds an image (image + caption) and straddles a page boundary is moved to the next page,
-    and a heading is never left alone at the bottom of a page."""
+def _document(markup: str, width: float, height: float):
     from PySide6.QtCore import QSizeF
-    from PySide6.QtGui import QTextCursor, QTextDocument, QTextFormat
-
-    width = (page_mm[0] - 2 * margin_mm) / 25.4 * _DPI
-    height = (page_mm[1] - 2 * margin_mm) / 25.4 * _DPI - footer_px
+    from PySide6.QtGui import QTextDocument
     doc = QTextDocument()
     doc.setDocumentMargin(0)
     doc.setPageSize(QSizeF(width, height))
-    doc.setHtml(html_for_page(width, height))
-    layout = doc.documentLayout()
+    doc.setHtml(markup)
+    doc.documentLayout().documentSize()                          # forces the complete layout
+    return doc
 
-    def has_image(block) -> bool:
+
+def _blocks(doc):
+    """(kind, index, block, rect) for every heading and every block that holds an image, in document order."""
+    layout, block, counts = doc.documentLayout(), doc.begin(), {"image": 0, "heading": 0}
+    while block.isValid():
+        kind = "heading" if block.blockFormat().headingLevel() > 0 else None
         it = block.begin()
-        while not it.atEnd():
+        while kind is None and not it.atEnd():
             if it.fragment().charFormat().isImageFormat():
-                return True
+                kind = "image"
             it += 1
-        return False
+        if kind:
+            yield kind, counts[kind], block, layout.blockBoundingRect(block)
+            counts[kind] += 1
+        block = block.next()
+
+
+def layout_pdf(make_html, page_mm: tuple[float, float] = (210, 297), margin_mm: float = 15,
+               header_px: float = 30, footer_px: float = 26):
+    """Returns (document, page width, page height) in CSS pixels. make_html(page, breaks, placeholder) -> HTML.
+
+    Qt's rich text has no 'keep together', and editing a laid-out document makes it drop content when painted. So
+    the breaks are found in measuring rounds on a light copy (images replaced by empty boxes of identical size):
+    the first image block that straddles a page boundary, or heading left alone at a page bottom, is recorded, the
+    HTML is rebuilt with a page break before it, and the round repeats. The final document is built once, with the
+    real images, and never modified.
+
+    A third correction: when the previous section ends within a few pixels of the page bottom, the next heading
+    flows to a new page by itself and Qt applies the forced break on top, leaving a blank page. Such headings are
+    recorded under "flow" and lose their forced break."""
+    # whole pixels: Qt rounds block positions, a fractional page height puts page-top blocks a hair before the boundary
+    width = float(int((page_mm[0] - 2 * margin_mm) / 25.4 * _DPI))
+    height = float(int((page_mm[1] - 2 * margin_mm) / 25.4 * _DPI - header_px - footer_px))
+    breaks = {"image": set(), "heading": set(), "flow": set()}
 
     def page_of(y: float) -> int:
-        return int(y // height)
+        return int((y + 0.5) // height)
 
-    for _ in range(400):                                        # each pass fixes the first offender, then re-measures
-        block, moved = doc.begin(), False
-        while block.isValid() and not moved:
-            rect = layout.blockBoundingRect(block)
-            fmt = block.blockFormat()
-            already = fmt.pageBreakPolicy() & QTextFormat.PageBreak_AlwaysBefore
-            straddles = has_image(block) and rect.height() < height and page_of(rect.top()) != page_of(rect.bottom() - 1)
-            nxt = block.next()
-            orphan = (fmt.headingLevel() > 0 and nxt.isValid()
-                      and page_of(layout.blockBoundingRect(nxt).top()) != page_of(rect.top()))
-            if (straddles or orphan) and not already:
-                fmt.setPageBreakPolicy(QTextFormat.PageBreak_AlwaysBefore)
-                QTextCursor(block).setBlockFormat(fmt)
-                moved = True
-            block = nxt
-        if not moved:
+    for _ in range(300):
+        doc = _document(make_html((width, height), breaks, True), width, height)
+        found = None
+        items = list(_blocks(doc))
+        for kind, index, block, rect in items:
+            before = block.previous()
+            if (kind == "heading" and index not in breaks["flow"] and before.isValid()
+                    and block.blockFormat().pageBreakPolicy().value
+                    and page_of(doc.documentLayout().blockBoundingRect(before).bottom() - 1) < page_of(rect.top()) - 1):
+                found = ("flow", index)                         # a blank page lies before this heading
+                break
+            if index in breaks[kind]:
+                continue
+            if kind == "image" and rect.height() < height and page_of(rect.top()) != page_of(rect.bottom() - 1):
+                found = (kind, index)
+            elif kind == "heading" and block.next().isValid():
+                after = doc.documentLayout().blockBoundingRect(block.next())
+                if page_of(after.top()) != page_of(rect.top()):
+                    found = (kind, index)
+            if found:
+                break
+        if not found:
             break
-    return doc, width, height
+        breaks[found[0]].add(found[1])
+    final = _document(make_html((width, height), breaks, False), width, height)
+    return final, width, height
+
+
+def continued_titles(doc, height: float) -> dict[int, str]:
+    """page index -> title of the section that runs on from the previous page (pages that open a section are absent)."""
+    sections = [(rect.top(), block.text()) for kind, _, block, rect in _blocks(doc)
+                if kind == "heading" and block.blockFormat().headingLevel() >= 2]
+    out = {}
+    for page in range(1, doc.pageCount()):
+        top = page * height
+        if any(-1 <= y - top < 40 for y, _ in sections):        # a section opens this page
+            continue
+        running = [title for y, title in sections if y < top - 1]
+        if running:
+            out[page] = running[-1]
+    return out
 
 
 def write_pdf(target: str, ev: Evidence, results: dict[str, Result], verdicts: dict[str, AxisVerdict],
-              params: dict[str, dict], examiner: str = "", notes: str = "") -> int:
-    """A4 report with fitted, unbroken images and a footer on every page. Returns the page count."""
+              params: dict[str, dict], examiner: str = "", notes: str = "", include=None) -> int:
+    """A4 report. Returns the page count."""
     from PySide6.QtCore import QMarginsF, QRectF, Qt
-    from PySide6.QtGui import QColor, QFont, QPageLayout, QPageSize, QPainter
+    from PySide6.QtGui import QColor, QFont, QPageLayout, QPageSize, QPainter, QPen
     from PySide6.QtPrintSupport import QPrinter
 
-    margin_mm, footer_px = 15, 26
-    doc, width, height = layout_pdf(lambda w, h: build_html(ev, results, verdicts, params, examiner, notes, page=(w, h)),
-                                    margin_mm=margin_mm, footer_px=footer_px)
+    margin_mm, header_px, footer_px = 15, 30, 26
+
+    def make_html(page, breaks, placeholder):
+        return build_html(ev, results, verdicts, params, examiner, notes, include, page, breaks, placeholder)
+
+    doc, width, height = layout_pdf(make_html, margin_mm=margin_mm, header_px=header_px, footer_px=footer_px)
+    continued = continued_titles(doc, height)
     printer = QPrinter(QPrinter.HighResolution)
     printer.setOutputFormat(QPrinter.PdfFormat)
     printer.setOutputFileName(target)
@@ -187,23 +274,31 @@ def write_pdf(target: str, ev: Evidence, results: dict[str, Result], verdicts: d
     scale = printer.width() / width                             # device pixels per CSS pixel
     pages = doc.pageCount()
     stamp = f"{ev.path.name}   SHA-256 {ev.hashes['sha256'][:16]}..."
+
+    def font(px: int, bold: bool = False) -> QFont:
+        f = QFont("Segoe UI")
+        f.setPixelSize(px)                                      # CSS pixels: the painter is already scaled to the page
+        f.setBold(bold)
+        return f
+
     for i in range(pages):
         if i:
             printer.newPage()
         painter.save()
         painter.scale(scale, scale)
-        painter.translate(0, -i * height)
-        doc.drawContents(painter, QRectF(0, i * height, width, height))
-        painter.restore()
-        painter.save()
-        painter.scale(scale, scale)
-        font = QFont("Segoe UI")
-        font.setPixelSize(10)                                   # CSS pixels: the painter is already scaled to the page
-        painter.setFont(font)
+        if i in continued:                                      # running title of a section that continues here
+            painter.setFont(font(15, bold=True))
+            painter.setPen(QColor("#1c1c1c"))
+            painter.drawText(QRectF(0, 0, width, header_px - 8), Qt.AlignLeft | Qt.AlignVCenter, f"{continued[i]} (continued)")
+            painter.setPen(QPen(QColor("#bbbbbb"), 1))
+            painter.drawLine(0, int(header_px - 5), int(width), int(header_px - 5))
+        painter.setFont(font(10))
         painter.setPen(QColor("#777777"))
-        line = QRectF(0, height + 8, width, footer_px - 8)
+        line = QRectF(0, header_px + height + 8, width, footer_px - 8)
         painter.drawText(line, Qt.AlignLeft | Qt.AlignVCenter, stamp)
         painter.drawText(line, Qt.AlignRight | Qt.AlignVCenter, f"page {i + 1} of {pages}")
+        painter.translate(0, header_px - i * height)
+        doc.drawContents(painter, QRectF(0, i * height, width, height))
         painter.restore()
     painter.end()
     return pages

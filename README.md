@@ -16,6 +16,10 @@ upload button.
    *Overlay* blends the map over the photo, *Hold: original* flips back while pressed, *Side by side* shows the
    untouched photo next to it with zoom and pan linked. Wheel = zoom, drag = pan, double-click = fit / 1:1.
 4. Change a parameter on the right and the tool re-runs.
+5. **How to read this ...** (top of the right-hand panel) opens a guide for the selected tool: what the output
+   shows, how to interpret it, what every option does, what causes false alarms, and links to the papers and
+   projects the technique comes from.
+6. Drag the borders of the two side panels to make them wider or narrower; the widths are remembered.
 
 Dots in the tool list: green = nothing found, yellow = note, orange = suspicious, red = strong finding.
 
@@ -24,7 +28,7 @@ Dots in the tool list: green = nothing found, yellow = note, orange = suspicious
 | Compare | Align a second version of the picture onto this one: difference map, changed regions, metadata diff, noise spectra side by side |
 | Batch triage | Screen a whole folder, sort by suspicion, double-click to open, export CSV |
 | Calibrate | Measure a detector on **your own** authentic and manipulated images (AUC, detection rate at 1 % and 5 % false alarms), also after "laundering" such as `resize0.5+jpeg75` |
-| Export report | HTML or PDF case report (hashes, parameters, findings, maps) and a JSON record for machines. The PDF is laid out on A4: every image is fitted to the column, none is split across pages, each page carries the file name, hash and page number |
+| Export report | HTML or PDF case report (hashes, parameters, findings, maps) and a JSON record for machines. Tick which analyses to include (check all / none). The PDF is laid out on A4: every analysis starts on a new page, a page that continues a section is headed "<section> (continued)", every image is fitted to the column and none is split across pages, each page carries the file name, hash and page number |
 | Reverse image search | Copies the image to the clipboard and opens Google Lens / TinEye / Bing / Yandex: press Ctrl+V there |
 | Watermark check | Same clipboard hand-over for provenance checks that only exist as web pages: Google Gemini and the SynthID Detector portal (Google's SynthID watermark), OpenAI's verify page |
 | Settings | API key for the optional online detector |

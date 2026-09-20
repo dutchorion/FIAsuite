@@ -9,13 +9,14 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QThreadPool
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
-                               QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit,
+                               QProgressBar, QPushButton,
                                QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget)
 
-from .. import APP_NAME, calibrate, launder
+from .. import APP_NAME, calibrate, guide, launder
 from ..analyses import compare, online
 from ..core import IMAGE_EXTS, SEVERITY_ORDER, Evidence
-from ..report import build_html, build_json, write_pdf
+from ..report import build_html, build_json, ordered, title_of, write_pdf
 from ..tools import BY_ID, TOOLS, defaults
 from ..verdict import summarize
 from . import theme
@@ -32,18 +33,42 @@ class ReportDialog(QDialog):
         super().__init__(main)
         self.main = main
         self.setWindowTitle("Export report")
-        self.resize(520, 360)
+        self.resize(560, 680)
         lay = QVBoxLayout(self)
         form = QFormLayout()
         self.examiner = QLineEdit(online.load_config().get("examiner", ""))
         self.notes = QPlainTextEdit()
         self.notes.setPlaceholderText("Case number, source of the file, questions asked, observations ...")
+        self.notes.setMaximumHeight(110)
         form.addRow("Examiner", self.examiner)
         form.addRow("Notes", self.notes)
         lay.addLayout(form)
-        done = len(main.results)
-        info = QLabel(f"The report contains the {done} analyses run so far, with their parameters, findings and images."
-                      + (f"  {len(main.pending)} still running." if main.pending else ""))
+
+        head = QHBoxLayout()
+        label = QLabel("Analyses to include")
+        label.setObjectName("h2")
+        check_all, check_none = QPushButton("Check all"), QPushButton("Check none")
+        check_all.clicked.connect(lambda: self._set_all(Qt.Checked))
+        check_none.clicked.connect(lambda: self._set_all(Qt.Unchecked))
+        head.addWidget(label)
+        head.addStretch(1)
+        head.addWidget(check_all)
+        head.addWidget(check_none)
+        lay.addLayout(head)
+        self.tests = QListWidget()
+        for tool_id in ordered(main.results):                  # every analysis that has been run, in report order
+            res = main.results[tool_id]
+            worst = res.worst()
+            note = "" if worst == "info" else f"   - {max(res.findings, key=lambda f: SEVERITY_ORDER[f.severity]).title}"
+            item = QListWidgetItem(title_of(tool_id) + note)
+            item.setData(Qt.UserRole, tool_id)
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            item.setForeground(QColor(theme.SEVERITY_COLORS[worst] if worst != "info" else theme.TEXT))
+            self.tests.addItem(item)
+        lay.addWidget(self.tests, 1)
+        info = QLabel("Only analyses that have been run are listed; open a tool first to add it. In the PDF every "
+                      "analysis starts on a new page." + (f"  {len(main.pending)} still running." if main.pending else ""))
         info.setWordWrap(True)
         info.setObjectName("muted")
         lay.addWidget(info)
@@ -54,8 +79,19 @@ class ReportDialog(QDialog):
         buttons.addButton(QDialogButtonBox.Cancel).clicked.connect(self.reject)
         lay.addWidget(buttons)
 
+    def _set_all(self, state):
+        for i in range(self.tests.count()):
+            self.tests.item(i).setCheckState(state)
+
+    def selected(self) -> set[str]:
+        return {self.tests.item(i).data(Qt.UserRole) for i in range(self.tests.count())
+                if self.tests.item(i).checkState() == Qt.Checked}
+
     def save(self, kind: str):
         ev = self.main.ev
+        if not self.selected():
+            QMessageBox.information(self, APP_NAME, "Tick at least one analysis to include.")
+            return
         target, _ = QFileDialog.getSaveFileName(self, "Save report", str(ev.path.with_suffix(f".report.{kind}")),
                                                 f"{kind.upper()} (*.{kind})")
         if not target:
@@ -63,8 +99,9 @@ class ReportDialog(QDialog):
         cfg = online.load_config()
         cfg["examiner"] = self.examiner.text()
         online.save_config(cfg)
+        # the summary verdict always reflects everything that was run; the selection limits the detail sections
         args = (ev, self.main.results, summarize(self.main.results), self.main.params,
-                self.examiner.text(), self.notes.toPlainText())
+                self.examiner.text(), self.notes.toPlainText(), self.selected())
         if kind == "json":
             Path(target).write_text(json.dumps(build_json(*args), indent=1, ensure_ascii=False), encoding="utf-8")
         elif kind == "html":
@@ -381,6 +418,29 @@ class CalibrationWindow(QMainWindow):
                 writer = csv.DictWriter(fh, fieldnames=sorted({k for r in self.rows for k in r}))
                 writer.writeheader()
                 writer.writerows(self.rows)
+
+
+# ---------------------------------------------------------------------- guide
+
+class GuideDialog(QDialog):
+    """How to read a tool's output and use its options, with links to the origin of the technique."""
+
+    def __init__(self, tool, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"How to read: {tool.title}")
+        self.resize(760, 720)
+        lay = QVBoxLayout(self)
+        text = QTextBrowser()
+        text.setOpenExternalLinks(True)                        # sources open in the web browser
+        text.document().setDefaultStyleSheet(
+            f"h2 {{ font-size:15pt; }} h3 {{ font-size:11pt; color:{theme.MUTED}; margin-top:14px; }} "
+            f"li {{ margin-bottom:6px; }} a {{ color:#7aa2ff; }}")
+        key = tool.id.split(" (")[0]
+        text.setHtml(guide.render(key, tool.title, [p.label for p in tool.params]))
+        lay.addWidget(text, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
 
 
 # ---------------------------------------------------------------------- settings

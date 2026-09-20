@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
                                QFrame, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QProgressBar,
-                               QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter, QStackedWidget, QTableWidget,
+                               QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QStackedWidget, QTableWidget,
                                QTableWidgetItem, QTextBrowser, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                                QWidget)
 
@@ -242,6 +242,8 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.pixel_label)
         self.statusBar().addPermanentWidget(self.progress)
         self._set_enabled(False)
+        widths = online.load_config().get("sidebars", [290, 440])      # remembered from the last session
+        QTimer.singleShot(0, lambda: self.resizeDocks([self.tree_dock, self.details_dock], list(widths), Qt.Horizontal))
 
     # ------------------------------------------------------------------ construction
     def _build_toolbar(self):
@@ -308,7 +310,8 @@ class MainWindow(QMainWindow):
         dock = QDockWidget("Tools")
         dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
         dock.setWidget(self.tree)
-        dock.setMinimumWidth(270)
+        dock.setMinimumWidth(160)                  # drag the separator to resize
+        self.tree_dock = dock
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
 
     def _build_center(self):
@@ -347,7 +350,10 @@ class MainWindow(QMainWindow):
         bar.addStretch(1)
         bar.addWidget(fit)
         bar.addWidget(full)
-        lay.addLayout(bar)
+        bar_host = QWidget()
+        bar_host.setLayout(bar)
+        bar_host.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)   # lets the sidebars be dragged wide
+        lay.addWidget(bar_host)
         self.viewer = ImageView()
         self.reference = ImageView()
         self.viewer.link(self.reference)
@@ -384,7 +390,15 @@ class MainWindow(QMainWindow):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setWordWrap(True)
         self.filter = None
-        lay.addWidget(self.tool_title)
+        self.guide_button = QPushButton("How to read this ...")
+        self.guide_button.setToolTip("What the output shows, how to interpret it, what the options do, and the "
+                                     "sources of the technique")
+        self.guide_button.clicked.connect(self.open_guide)
+        self.guide_button.hide()
+        top = QHBoxLayout()
+        top.addWidget(self.tool_title, 1)
+        top.addWidget(self.guide_button)
+        lay.addLayout(top)
         lay.addWidget(self.tool_help)
         lay.addWidget(self.form_host)
         lay.addWidget(self.run_button)
@@ -396,12 +410,19 @@ class MainWindow(QMainWindow):
         dock = QDockWidget("Analysis")
         dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
         dock.setWidget(panel)
-        dock.setMinimumWidth(400)
+        dock.setMinimumWidth(240)
+        self.details_dock = dock
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
     def _set_enabled(self, on: bool):
         for w in (self.btn_scan, self.btn_compare, self.btn_report, self.btn_reverse, self.btn_marks):
             w.setEnabled(on)
+
+    def closeEvent(self, event):
+        cfg = online.load_config()
+        cfg["sidebars"] = [self.tree_dock.width(), self.details_dock.width()]
+        online.save_config(cfg)
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------ loading
     def dragEnterEvent(self, event):
@@ -498,6 +519,7 @@ class MainWindow(QMainWindow):
             self.current = None
             self.stack.setCurrentIndex(0)
             self.tool_title.setText("Dashboard")
+            self.guide_button.hide()
             self.tool_help.setText("Overview of every automatic analysis. Click a card or pick a tool on the left.")
             self._build_form(None)
             self.findings.clear()
@@ -506,6 +528,7 @@ class MainWindow(QMainWindow):
         self.current = next(t for t in ALL_TOOLS if t.id == tool_id)
         self.stack.setCurrentIndex(1)
         self.tool_title.setText(self.current.title)
+        self.guide_button.show()
         self.tool_help.setText(self.current.help)
         self._build_form(self.current)
         self.run_button.setVisible(self.current.manual)
@@ -694,6 +717,11 @@ class MainWindow(QMainWindow):
         """Offer the setup wizard at start-up while components are missing, unless the user opted out."""
         if components.missing() and not online.load_config().get("setup_skip", False):
             self.open_setup(first_run=True)
+
+    def open_guide(self):
+        if self.current is not None:
+            from .dialogs import GuideDialog
+            GuideDialog(self.current, self).exec()
 
     def open_settings(self):
         from .dialogs import SettingsDialog

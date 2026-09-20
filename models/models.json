@@ -30,7 +30,6 @@
     "policy": "squash",
     "output": "softmax",
     "fake_index": 0,
-    "weight": 0.5,
     "mean": [
       0.485,
       0.456,
@@ -53,5 +52,27 @@
     "size": 1024,
     "license": "GRIP-UNINA research licence (non-commercial)",
     "source": "https://github.com/grip-unina/TruFor"
+  },
+  {
+    "id": "bfree",
+    "name": "B-Free (DINOv2, 504 px crops)",
+    "file": "bfree_dinov2_504.onnx",
+    "kind": "classifier",
+    "size": 504,
+    "policy": "five_crop",
+    "output": "sigmoid",
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "license": "GRIP-UNINA licence (informational and nonprofit use only)",
+    "source": "https://github.com/grip-unina/B-Free",
+    "weight": 0
   }
 ]

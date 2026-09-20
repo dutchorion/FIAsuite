@@ -46,6 +46,7 @@ def summarize(results: dict[str, Result]) -> dict[str, AxisVerdict]:
             ai_hits = [f for f in flagged if f.severity in (WARN, ALERT) and _AI_WORDS.search(f.title)]
             if ai_hits:
                 clean["ai"] *= 1 - 0.97
+                out["ai"].tools_run += 1              # a declaration answers the question even without a detector
                 out["ai"].reasons += [(f.severity, title, f.title) for f in ai_hits]
         if res.score >= 0.3:                       # baseline scores must not accumulate
             clean[axis] *= 1 - min(res.score * weight, 0.99)

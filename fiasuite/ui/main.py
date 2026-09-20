@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import html
+import sys
+import traceback
 import webbrowser
 from pathlib import Path
 
@@ -15,8 +17,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDockWidget, 
                                QWidget)
 
 from .. import APP_NAME, __version__, components
-from ..analyses import online
-from ..core import IMAGE_EXTS, SEVERITY_ORDER, Evidence, Result
+from ..analyses import geometry, online
+from ..core import IMAGE_EXTS, SEVERITY_ORDER, Evidence, Result, app_dir
 from ..tools import TOOLS, Tool, defaults
 from ..verdict import headline, summarize
 from . import theme
@@ -86,6 +88,7 @@ class Card(QFrame):
         self.thumb = QLabel()
         self.thumb.setFixedSize(*self.THUMB)
         self.thumb.setAlignment(Qt.AlignCenter)
+        self.thumb.setTextFormat(Qt.PlainText)                  # finding titles can quote text from the file
         self.thumb.setStyleSheet(f"background:{theme.BG}; border-radius:6px; color:{theme.MUTED};")
         self.title = QLabel(tool.title)
         self.title.setObjectName("h2")
@@ -227,8 +230,11 @@ class MainWindow(QMainWindow):
         self.pool.setMaxThreadCount(3)
         self.signals = Signals()
         self.signals.done.connect(self._on_done)
+        self.result_params: dict[str, dict] = {}                 # options each stored result was computed with
+        self.lines: dict[str, list] = {name: [] for name in geometry.SETS}   # examiner-drawn lines per set
+        self._dirty: Tool | None = None                          # tool whose options changed, awaiting the debounce
         self.debounce = QTimer(self, singleShot=True, interval=350)
-        self.debounce.timeout.connect(lambda: self.current and self.run_tool(self.current))
+        self.debounce.timeout.connect(self._run_dirty)
 
         self._build_toolbar()
         self._build_tree()
@@ -270,6 +276,8 @@ class MainWindow(QMainWindow):
         bar.addSeparator()
         self.btn_compare = button("Compare ...", self.open_compare, tip="Compare with a second version of the picture")
         button("Batch triage ...", self.open_batch, tip="Screen a whole folder")
+        button("Camera fingerprint ...", self.open_fingerprints,
+               tip="Build a sensor-noise (PRNU) fingerprint from reference photos of one camera")
         button("Calibrate ...", self.open_calibration,
                tip="Measure how well a detector separates your own authentic and manipulated images")
         self.btn_report = button("Export report ...", self.export_report)
@@ -359,6 +367,7 @@ class MainWindow(QMainWindow):
         self.viewer.link(self.reference)
         self.reference.hide()
         self.viewer.pixel_hovered.connect(self._on_pixel)
+        self.viewer.line_drawn.connect(self._on_line)
         split = self.view_split = QSplitter(Qt.Horizontal)
         split.addWidget(self.viewer)
         split.addWidget(self.reference)
@@ -378,6 +387,19 @@ class MainWindow(QMainWindow):
         self.form_host = QWidget()
         self.form = QFormLayout(self.form_host)
         self.form.setContentsMargins(0, 6, 0, 6)
+        self.geometry_bar = QWidget()                # controls of the line-drawing tool
+        row = QHBoxLayout(self.geometry_bar)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.line_set = QComboBox()
+        self.line_set.addItems([f"Set {name}" for name in geometry.SETS])
+        row.addWidget(QLabel("Draw into"))
+        row.addWidget(self.line_set, 1)
+        for text, slot in (("Undo line", lambda: self._edit_lines("undo")), ("Clear set", lambda: self._edit_lines("set")),
+                           ("Clear all", lambda: self._edit_lines("all"))):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        self.geometry_bar.hide()
         self.run_button = QPushButton("Upload and analyse")
         self.run_button.clicked.connect(self._run_manual)
         self.run_button.hide()
@@ -389,7 +411,6 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setWordWrap(True)
-        self.filter = None
         self.guide_button = QPushButton("How to read this ...")
         self.guide_button.setToolTip("What the output shows, how to interpret it, what the options do, and the "
                                      "sources of the technique")
@@ -401,6 +422,7 @@ class MainWindow(QMainWindow):
         lay.addLayout(top)
         lay.addWidget(self.tool_help)
         lay.addWidget(self.form_host)
+        lay.addWidget(self.geometry_bar)
         lay.addWidget(self.run_button)
         split = QSplitter(Qt.Vertical)
         split.addWidget(self.findings)
@@ -419,6 +441,8 @@ class MainWindow(QMainWindow):
             w.setEnabled(on)
 
     def closeEvent(self, event):
+        self.pool.clear()                            # queued analyses must not keep the process alive
+        self.generation += 1
         cfg = online.load_config()
         cfg["sidebars"] = [self.tree_dock.width(), self.details_dock.width()]
         online.save_config(cfg)
@@ -447,8 +471,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, f"Cannot open {path}\n\n{exc}")
             return
         self.ev = ev
+        ev.luma                                      # shared by most tools: compute once, not once per thread
+        self.pool.clear()                            # analyses still queued for the previous image
         self.generation += 1
         self.results.clear()
+        self.result_params.clear()
+        self.lines = {name: [] for name in geometry.SETS}
         self.errors.clear()
         self.pending.clear()
         self.setWindowTitle(f"{ev.path.name} - {APP_NAME}")
@@ -463,13 +491,21 @@ class MainWindow(QMainWindow):
     def scan(self):
         if self.ev is None:
             return
-        for tool in TOOLS:
-            if tool.auto:
-                self.run_tool(tool)
+        self.pool.clear()                            # drop queued duplicates; whatever was pending is queued again
+        again = [t for t in ALL_TOOLS if t.auto or (t.id in self.pending and not t.manual)]
+        self.pending.clear()
+        for tool in again:
+            self.run_tool(tool)
 
     # ------------------------------------------------------------------ running tools
-    def run_tool(self, tool: Tool):
-        if self.ev is None:
+    def _run_dirty(self):
+        tool, self._dirty = self._dirty, None
+        if tool is not None:
+            self.run_tool(tool)
+
+    def run_tool(self, tool: Tool, confirmed: bool = False):
+        """confirmed: the user agreed to the upload; tools that send the image away never start without it."""
+        if self.ev is None or (tool.manual and not confirmed):
             return
         self.pending.add(tool.id)
         self.items[tool.id].setIcon(0, dot(theme.ACCENT))
@@ -492,6 +528,7 @@ class MainWindow(QMainWindow):
             self.items[tool_id].setIcon(0, dot("#8b8d98"))
         else:
             self.results[tool_id] = res
+            self.result_params[tool_id] = dict(self.params[tool_id])
             self.items[tool_id].setIcon(0, dot(result_color(res)))
         if tool_id in self.dashboard.cards:
             self.dashboard.cards[tool_id].set_result(res, error)
@@ -515,6 +552,11 @@ class MainWindow(QMainWindow):
         if item is None:
             return
         tool_id = item.data(0, Qt.UserRole)
+        drawing = tool_id == "geometry" and self.ev is not None
+        self.geometry_bar.setVisible(tool_id == "geometry")
+        self.viewer.set_draw_mode(drawing)
+        if not drawing:
+            self.viewer.set_lines([], [])
         if tool_id is None:
             self.current = None
             self.stack.setCurrentIndex(0)
@@ -534,16 +576,41 @@ class MainWindow(QMainWindow):
         self.run_button.setVisible(self.current.manual)
         if self.ev is None:
             return
+        if drawing:
+            self._update_geometry()
+            return
         if tool_id in self.results or tool_id in self.errors:
             self._show_result()
         elif tool_id not in self.pending and not self.current.manual:
             self.viewer.set_images(self.ev.bgr)
             self.findings.setHtml("<i>Analysing ...</i>")
+            self.table.setRowCount(0)
             self.run_tool(self.current)
         else:
             self.viewer.set_images(self.ev.bgr)
             self.findings.setHtml("<i>Analysing ...</i>" if tool_id in self.pending else "")
             self.table.setRowCount(0)
+
+    # ------------------------------------------------------------------ geometry tool (lines drawn in the viewer)
+    def _on_line(self, x1: float, y1: float, x2: float, y2: float):
+        self.lines[self.line_set.currentText()[-1]].append((x1, y1, x2, y2))
+        self._update_geometry()
+
+    def _edit_lines(self, what: str):
+        current = self.lines[self.line_set.currentText()[-1]]
+        if what == "undo" and current:
+            current.pop()
+        elif what == "set":
+            current.clear()
+        elif what == "all":
+            self.lines = {name: [] for name in geometry.SETS}
+        self._update_geometry()
+
+    def _update_geometry(self):
+        res = geometry.analyse(self.ev, self.lines)
+        self.results["geometry"], self.result_params["geometry"] = res, {}
+        self.items["geometry"].setIcon(0, dot(result_color(res)))
+        self._show_result()
 
     def _run_manual(self):
         if self.ev is None or self.current is None:
@@ -553,7 +620,7 @@ class MainWindow(QMainWindow):
                                   "Continue?") == QMessageBox.Yes
         if ok:
             self.findings.setHtml("<i>Uploading ...</i>")
-            self.run_tool(self.current)
+            self.run_tool(self.current, confirmed=True)
 
     def _build_form(self, tool: Tool | None):
         while self.form.rowCount():
@@ -565,12 +632,15 @@ class MainWindow(QMainWindow):
 
         def changed(key, value):
             values[key] = value
+            if self._dirty not in (None, tool):      # options of another tool are still waiting: run that one now
+                self._run_dirty()
+            self._dirty = tool
             self.debounce.start()
 
         for p in tool.params:
             if p.choices:
                 w = QComboBox()
-                w.addItems(p.choices)
+                w.addItems(p.choices() if callable(p.choices) else p.choices)
                 w.setCurrentText(str(values[p.key]))
                 w.currentTextChanged.connect(lambda v, k=p.key: changed(k, v))
             elif isinstance(p.default, bool):
@@ -601,7 +671,8 @@ class MainWindow(QMainWindow):
         box.setValue(int(values[p.key]))
         slider.valueChanged.connect(lambda v: box.setValue(v * step))
         box.valueChanged.connect(lambda v: (slider.blockSignals(True), slider.setValue(v // step),
-                                            slider.blockSignals(False), changed(p.key, v)))
+                                            slider.blockSignals(False),
+                                            changed(p.key, max(int(p.lo), v // step * step))))
         row.addWidget(slider, 1)
         row.addWidget(box)
         return host
@@ -643,6 +714,15 @@ class MainWindow(QMainWindow):
     def _show_view(self, keep: bool = False):
         if self.ev is None or self.current is None:
             return
+        if self.current.id == "geometry":            # the lines are drawn live on the image itself
+            self.viewer.set_images(self.ev.bgr, keep_view=keep)
+            vectors = [(*line, geometry.SETS[name]) for name, lines in self.lines.items() for line in lines]
+            points = [m["point"] for m in map(geometry.measure, self.lines.values()) if m["point"] is not None]
+            self.viewer.set_lines(vectors, points)
+            for w in (self.opacity, self.hold, self.overlay_label, self.side):
+                w.setEnabled(False)
+            self.reference.hide()
+            return
         res = self.results.get(self.current.id)
         view = res.views.get(self.view_combo.currentText()) if res else None
         if view is None:
@@ -667,6 +747,9 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.viewer.fit)
 
     def _on_pixel(self, x: int, y: int):
+        if not self.viewer.shows(self.ev.bgr if self.ev is not None else None):
+            self.pixel_label.setText("")             # a plot or spectrum is shown: its pixels are not the evidence's
+            return
         if self.ev is not None and 0 <= x < self.ev.width and 0 <= y < self.ev.height:
             b, g, r = self.ev.bgr[y, x]
             self.pixel_label.setText(f"x {x}  y {y}   RGB {r} {g} {b}   zoom {self.viewer.zoom_factor():.0%}   ")
@@ -694,16 +777,25 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Reference image to compare with", str(self.ev.path.parent))
         if path:
             self._compare = CompareWindow(self.ev, path, self)
+            self._compare.setAttribute(Qt.WA_DeleteOnClose)
             self._compare.show()
 
     def open_batch(self):
         from .dialogs import BatchWindow
         self._batch = BatchWindow(self)
+        self._batch.setAttribute(Qt.WA_DeleteOnClose)
         self._batch.show()
+
+    def open_fingerprints(self):
+        from .dialogs import FingerprintWindow
+        self._fingerprints = FingerprintWindow(self)
+        self._fingerprints.setAttribute(Qt.WA_DeleteOnClose)
+        self._fingerprints.show()
 
     def open_calibration(self):
         from .dialogs import CalibrationWindow
         self._calibration = CalibrationWindow(self)
+        self._calibration.setAttribute(Qt.WA_DeleteOnClose)
         self._calibration.show()
 
     def open_setup(self, first_run: bool = False):
@@ -757,6 +849,16 @@ def headless_install(ids: str, out: str) -> int:
     return 0
 
 
+def _report_crash(kind, value, trace):
+    """pythonw and the windowed exe have no console: write the traceback next to the app and show it."""
+    text = "".join(traceback.format_exception(kind, value, trace))
+    try:
+        (app_dir() / "fiasuite-error.log").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+    QMessageBox.critical(None, APP_NAME, f"Unexpected error (also written to fiasuite-error.log):\n\n{text[-1500:]}")
+
+
 def run(argv: list[str]) -> int:
     if len(argv) == 4 and argv[1] == "--selftest":
         return selftest(argv[2], argv[3])
@@ -764,6 +866,7 @@ def run(argv: list[str]) -> int:
         return headless_install(argv[2], argv[3])
     app = QApplication(argv)
     app.setApplicationName(APP_NAME)
+    sys.excepthook = _report_crash
     theme.apply(app)
     win = MainWindow()
     win.show()

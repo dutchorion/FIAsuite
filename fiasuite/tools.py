@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .analyses import ai, clone, compression, interpolation, jpegstruct, metadata, noise, spectral, visual
+from .analyses import ai, clone, compression, geometry, interpolation, jpegstruct, metadata, noise, prnu, spectral, visual, watermark
 
 
 @dataclass
@@ -16,7 +16,7 @@ class Param:
     lo: float = 0
     hi: float = 100
     step: float = 1
-    choices: list[str] | None = None        # set -> combo box; bool default -> check box
+    choices: list[str] | Callable[[], list[str]] | None = None   # combo box (callable: read when shown); bool default -> check box
 
 
 @dataclass
@@ -59,7 +59,9 @@ TOOLS: list[Tool] = [
     Tool("ela", "Error level analysis", "Compression", compression.ela,
          "Re-saves the image as JPEG and shows what changed. Regions edited after the last save respond differently. "
          "Interpret by comparing similar surfaces; edges and textures are always brighter.",
-         [Param("quality", "JPEG quality", 90, 50, 100), Param("scale", "Error scale", 20, 1, 100)]),
+         [Param("quality", "JPEG quality", 90, 50, 100), Param("auto_scale", "Automatic error scale", True),
+          Param("scale", "Error scale", 20, 1, 100),
+          Param("mode", "Display", "Colour", choices=compression.ELA_MODES)]),
     Tool("ghosts", "JPEG ghosts", "Compression", compression.ghosts,
          "Farid's JPEG-ghost method: content that was once saved at a lower JPEG quality reveals itself as a minimum "
          "of the recompression error at that quality. Misaligned grids found by the block-grid tool are tested too.",
@@ -79,11 +81,14 @@ TOOLS: list[Tool] = [
     Tool("noise", "Noise residual", "Noise & sensor", noise.residual,
          "Isolates the image noise with a median filter. Missing, coarser or differently coloured grain betrays "
          "airbrushing, inpainting and pasted content.",
-         [Param("amplitude", "Noise amplitude", 25, 1, 100), Param("equalize", "Equalize histogram", False)]),
+         [Param("amplitude", "Noise amplitude", 25, 1, 100), Param("equalize", "Equalize histogram", False),
+          Param("denoiser", "Denoiser", "Median 3x3", choices=noise.DENOISERS),
+          Param("luminance", "Grey (strength only)", False)]),
     Tool("noisemap", "Noise-level consistency", "Noise & sensor", noise.noise_map,
          "Estimates the noise level per block and compares blocks of equal brightness. A photo from one sensor has "
          "one noise characteristic; splices and local smoothing do not.",
-         [Param("block", "Block size", 32, 16, 128, 16)], auto=True, axis="edit", weight=0.7),
+         [Param("block", "Block size", 32, 16, 128, 16),
+          Param("sensitivity", "Outlier threshold (z-score)", 2.5, 1.5, 6.0, 0.25)], auto=True, axis="edit", weight=0.7),
     Tool("cfa", "CFA / demosaicing traces", "Noise & sensor", interpolation.cfa,
          "A camera sensor records one colour per pixel and interpolates the rest, leaving a periodic trace. Regions "
          "without that trace did not come through the camera pipeline.",
@@ -91,14 +96,23 @@ TOOLS: list[Tool] = [
     Tool("resampling", "Resampling detection", "Noise & sensor", interpolation.resampling,
          "Scaling or rotating image content leaves periodic correlations between pixels (Popescu & Farid). Finds "
          "inserted objects that were resized to fit.",
-         [Param("window", "Window size", 128, 64, 512, 64)], auto=True, axis="edit", weight=0.8),
+         [Param("window", "Window size", 128, 64, 512, 64),
+          Param("threshold", "Peak threshold (x background)", 6.0, 3.0, 15.0, 0.5)], auto=True, axis="edit", weight=0.8),
+
+    Tool("prnu", "Camera fingerprint (PRNU)", "Noise & sensor", prnu.identify,
+         "Tests whether the photo carries the sensor pattern noise of a specific camera, and maps regions where "
+         "that pattern is missing. Needs a fingerprint built from reference photos of the camera "
+         "('Camera fingerprint ...' in the toolbar).",
+         [Param("fingerprint", "Camera fingerprint", prnu.NONE, choices=prnu.stored),
+          Param("block", "Analysis window", "Auto", choices=["Auto", "64", "128", "256", "512"])], axis="edit"),
 
     # ---------------------------------------------------------------- clone
     Tool("clone_kp", "Clone detection (keypoints)", "Copy-move", clone.keypoints,
          "Matches distinctive points against the rest of the same image. Finds duplicated objects even when scaled "
          "or rotated. Needs texture.",
          [Param("min_distance", "Minimal distance", 40, 8, 400), Param("ratio", "Match strictness", 0.55, 0.3, 0.8, 0.05),
-          Param("min_matches", "Minimal matches", 8, 4, 50)], auto=True, axis="edit"),
+          Param("min_matches", "Minimal matches", 12, 4, 50),
+          Param("mirrored", "Also search mirrored copies", False)], auto=True, axis="edit"),
     Tool("clone_blocks", "Clone detection (blocks)", "Copy-move", clone.blocks,
          "Compares every small block with every other. Finds copied smooth areas (sky, skin, walls) that carry no "
          "keypoints, for copies that were moved but not scaled.",
@@ -118,15 +132,37 @@ TOOLS: list[Tool] = [
     Tool("spectrum", "Spectral fingerprint", "AI & deep learning", spectral.spectrum,
          "Averaged Fourier spectrum of the noise residual. Generator up-sampling leaves a regular lattice of peaks; "
          "also reports how the spectrum falls off towards fine detail.",
-         [Param("tile", "Tile size", 512, 128, 1024, 128),
+         [Param("tile", "Tile size", "512", choices=["128", "256", "512", "1024"]),
+          Param("auto_tile", "Reduce tile size to fit small images", True),
           Param("residual", "Noise residual", "Wiener (adaptive)", choices=spectral.RESIDUALS),
+          Param("strength", "Denoiser strength (sigma / window)", 1.2, 0.5, 3.0, 0.1),
           Param("channel", "Channel", "Luminance", choices=spectral.CHANNELS),
-          Param("overlap", "Overlapping tiles", False)], auto=True, axis="ai", weight=0.7),
+          Param("overlap", "Overlapping tiles", False),
+          Param("tile_limit", "Tile limit (0 = all)", 300, 0, 2000, 50),
+          Param("peak_z", "Peak threshold (z-score)", 8.0, 3.0, 20.0, 0.5),
+          Param("peak_ratio", "Minimal peak / background", 1.5, 1.1, 5.0, 0.1),
+          Param("colormap", "Colour map", "Bone", choices=list(spectral.COLORMAPS))], auto=True, axis="ai", weight=0.7),
+
+    Tool("watermark", "Invisible watermark (Stable Diffusion)", "AI & deep learning", watermark.detect,
+         "Decodes the invisible watermark that Stability AI's reference software embeds in generated images "
+         "(SD 1.x, SD 2.x, SDXL). A hit is conclusive; a miss means nothing.", auto=True, axis="ai"),
 
     # ---------------------------------------------------------------- visual inspection
+    Tool("geometry", "Geometry: shadows, perspective, reflections", "Visual inspection", geometry.analyse,
+         "Draw lines on the picture to test physical consistency: shadow lines must meet at the light source, "
+         "parallel edges in one vanishing point, object-reflection lines likewise. Works on any image, however "
+         "often it was recompressed or resized - including AI-generated ones."),
     Tool("enhance", "Magnifier enhancement", "Visual inspection", visual.enhance,
          "Contrast enhancement for zoomed inspection of edges, halos and texture.",
          [Param("mode", "Enhancement", "CLAHE", choices=visual.ENHANCEMENTS[1:])]),
+    Tool("histogram", "Histogram", "Visual inspection", visual.histogram,
+         "Pixel-value histograms and clipped pixels. A comb of gaps or spikes means the tones were remapped after "
+         "capture (levels, curves, contrast).",
+         [Param("channel", "Channel", "All", choices=["All", "Red", "Green", "Blue", "Luminance"]),
+          Param("log_scale", "Logarithmic scale", False)]),
+    Tool("hidden", "Hidden pixels (transparency)", "Visual inspection", visual.hidden_pixels,
+         "Shows the colour stored under transparent pixels and the alpha channel itself. Content 'erased' in an "
+         "editor often survives there."),
     Tool("gradient", "Luminance gradient", "Visual inspection", visual.luminance_gradient,
          "Colour-codes the direction of brightness change. Inconsistent lighting and the soft edges of composited "
          "objects stand out."),

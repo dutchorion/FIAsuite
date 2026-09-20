@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 
 class Signals(QObject):
     done = Signal(str, object, str, int)          # key, result | None, error text, generation
+    progress = Signal(int, int)                   # steps done, steps in total (long jobs that report it)
 
 
 class Job(QRunnable):

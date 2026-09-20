@@ -180,13 +180,17 @@ def install_exiftool_zip(data: bytes, folder: Path) -> None:
             raise SetupError("The ExifTool archive does not contain exiftool.exe.")
         top = exe.rsplit("/", 1)[0] + "/" if "/" in exe else ""
         shutil.rmtree(folder / "exiftool_files", ignore_errors=True)
+        (folder / "exiftool.exe").unlink(missing_ok=True)
+        base = folder.resolve()
         for info in z.infolist():
             rel = info.filename[len(top):]
-            if info.is_dir() or not info.filename.startswith(top) or ".." in Path(rel).parts:
-                continue
-            out = folder / ("exiftool.exe" if info.filename == exe else rel)
+            out = (folder / rel).resolve()
+            if info.is_dir() or info.filename == exe or not info.filename.startswith(top) or not out.is_relative_to(base):
+                continue                               # never write outside the target folder (zip-slip)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(z.read(info))
+        # the exe marks the component as installed: write it last, so an interrupted extraction is retried
+        (folder / "exiftool.exe").write_bytes(z.read(exe))
 
 
 def install(c: Component, progress: Progress, cancelled: Callable[[], bool], token: str | None = None) -> None:

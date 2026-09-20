@@ -13,13 +13,20 @@ import numpy as np
 
 from ..core import ALERT, INFO, NOTE, WARN, Evidence, Finding, Result, app_dir
 
+# unmistakable anywhere, including captions and keywords
 AI_GENERATORS = re.compile(
-    r"\b(midjourney|dall[\-·. ]?e|stable[\- ]?diffusion|sdxl|comfyui|automatic1111|invokeai|novelai|"
-    r"adobe firefly|firefly|made with google ai|google ai|imagen ?\d|gemini|openai|chatgpt|gpt-image|"
-    r"gpt-4o|sora|grok|black forest labs|flux\.?1|flux[\- ](dev|pro|schnell)|ideogram|leonardo\.?ai|"
-    r"playground ai|runway|bing image creator|image creator|copilot designer|dreamstudio|nightcafe|"
-    r"craiyon|fooocus|recraft|krea|seedream|qwen-image|hunyuan|ai[\- ]generated|generative fill|"
-    r"trainedalgorithmicmedia|trained algorithmic media)\b", re.I)
+    r"\b(midjourney|dall[\-·. ]?e ?[23]|stable[\- ]?diffusion|sdxl|comfyui|automatic1111|invokeai|novelai|"
+    r"adobe firefly|made with google ai|gpt-image|black forest labs|flux\.?1|flux[\- ](dev|pro|schnell)|"
+    r"leonardo\.?ai|playground ai|bing image creator|copilot designer|dreamstudio|nightcafe|craiyon|fooocus|"
+    r"seedream|qwen-image|ai[\- ]generated|generative fill|trainedalgorithmicmedia|"
+    r"trained algorithmic media)\b", re.I)
+# also ordinary words ('a firefly at dusk', 'Gemini constellation', 'runway show'): only meaningful where a
+# tag names the software or the source of the file
+AI_GENERATORS_IN_SOFTWARE_TAGS = re.compile(
+    r"\b(dall[\-·. ]?e|firefly|google ai|imagen ?\d|gemini|openai|chatgpt|gpt-4o|sora|grok|ideogram|runway|"
+    r"image creator|recraft|krea|hunyuan)\b", re.I)
+SOFTWARE_TAGS = ("Software", "CreatorTool", "HistorySoftwareAgent", "ProcessingSoftware", "Producer",
+                 "ClaimGenerator", "Claim_generator", "SoftwareAgent", "Credit", "Source", "DigitalSourceType")
 
 EDITORS = re.compile(
     r"\b(photoshop|gimp|affinity|pixelmator|snapseed|picsart|facetune|canva|paint\.net|luminar|"
@@ -48,19 +55,24 @@ def _exiftool(args: list[str], binary: bool = False):
     argfile = "\n".join(["-charset", "filename=utf8", *args]).encode("utf-8")
     proc = subprocess.run([str(exiftool_path()), "-@", "-"], input=argfile, capture_output=True,
                           creationflags=_NO_WINDOW, timeout=120)
-    return proc.stdout if binary else proc.stdout.decode("utf-8", "replace")
+    if binary:
+        return proc.stdout
+    if not proc.stdout.strip():                    # broken install, quarantined exe, unreadable file
+        raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip()[:400] or f"exit code {proc.returncode}")
+    return proc.stdout.decode("utf-8", "replace")
 
 
 def read_metadata(ev: Evidence) -> dict:
     if "meta" not in ev.cache and not exiftool_path().exists():
         ev.cache["meta"] = {}                      # fresh clone without vendor/exiftool: no metadata, no crash
     if "meta" not in ev.cache:
-        out = _exiftool(["-j", "-G1", "-a", "-s", "-api", "RequestAll=2", "-api", "LargeFileSupport=1",
-                         "-All", "-JPEGDigest", "-JPEGQualityEstimate", str(ev.path)])
         try:
+            out = _exiftool(["-j", "-G1", "-a", "-s", "-api", "RequestAll=2", "-api", "LargeFileSupport=1",
+                             "-All", "-JPEGDigest", "-JPEGQualityEstimate", str(ev.path)])
             ev.cache["meta"] = json.loads(out)[0]
-        except (json.JSONDecodeError, IndexError):
+        except (RuntimeError, OSError, subprocess.SubprocessError, json.JSONDecodeError, IndexError) as exc:
             ev.cache["meta"] = {}
+            ev.cache["meta_error"] = str(exc) or type(exc).__name__   # 'no metadata' and 'could not read' differ
     return ev.cache["meta"]
 
 
@@ -88,6 +100,11 @@ def run_metadata(ev: Evidence) -> Result:
         res.findings.append(Finding(WARN, "ExifTool not found", f"Expected at {exiftool_path()}"))
         return res
     meta = read_metadata(ev)
+    if "meta_error" in ev.cache:
+        res.findings.append(Finding(WARN, "ExifTool could not read the file",
+            f"{ev.cache['meta_error']}\nThe metadata was NOT examined. Reinstall ExifTool under Setup if this "
+            "happens for every file."))
+        return res
     res.table = [(k, _short(v)) for k, v in meta.items() if k != "SourceFile"]
     f = res.findings
 
@@ -112,8 +129,8 @@ def run_metadata(ev: Evidence) -> Result:
     for key, value in meta.items():
         if key.split(":")[0] in ("System", "File", "ExifTool", "ICC_Profile", "ICC-header"):
             continue
-        m = AI_GENERATORS.search(str(value))
-        if m:
+        in_software_tag = key.rpartition(":")[2] in SOFTWARE_TAGS or re.search(r"AI(System|Prompt)", key)
+        if AI_GENERATORS.search(str(value)) or (in_software_tag and AI_GENERATORS_IN_SOFTWARE_TAGS.search(str(value))):
             ai_hits.append(f"{key} = {_short(value, 120)}")
     if ai_hits and not any(x.severity == ALERT for x in f):
         f.append(Finding(ALERT if len(ai_hits) > 1 else WARN, "AI generator named in metadata", "\n".join(ai_hits[:8])))
@@ -162,8 +179,10 @@ def run_metadata(ev: Evidence) -> Result:
             f.append(Finding(NOTE, f"Generator-typical dimensions ({ev.width} x {ev.height})",
                              "Both sides are multiples of 64 commonly produced by diffusion models. Weak hint only."))
     elif make:
-        has_makernotes = any(k.startswith("MakerNotes") or k.split(":")[0].lower() == str(make).split()[0].lower()
-                             for k in meta)
+        brand = (str(make).lower().split() or [""])[0]
+        brand = {"om": "olympus", "ricoh": "pentax"}.get(brand, brand)   # ExifTool's group names for their MakerNotes
+        groups = {k.split(":")[0].lower() for k in meta}
+        has_makernotes = any(g.startswith(("makernotes", brand)) for g in groups) if brand else True
         if any(b in str(make).lower() for b in MAKERNOTE_BRANDS) and not has_makernotes:
             f.append(Finding(NOTE, "MakerNotes missing",
                              f"{make} {model or ''} normally writes MakerNotes; they were dropped by software that re-saved the file."))
@@ -207,12 +226,16 @@ def run_thumbnail(ev: Evidence) -> Result:
     the camera's original thumbnail untouched after the pixels were changed."""
     res = Result()
     if not exiftool_path().exists():
+        res.findings.append(Finding(NOTE, "ExifTool not installed: thumbnail check skipped", "Install it under Setup."))
         return res
     best = None
+    present = {k.rpartition(":")[2] for k in read_metadata(ev)}      # only extract previews that exist
     for name in ("ThumbnailImage", "PreviewImage", "JpgFromRaw", "OtherImage"):
+        if name not in present:
+            continue
         raw = _exiftool(["-b", f"-{name}", str(ev.path)], binary=True)
-        if len(raw) > 100:
-            thumb = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+        if len(raw) > 100:                         # stored pixel grid, like the main image: no EXIF rotation
+            thumb = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
             if thumb is not None and (best is None or thumb.shape[1] > best[1].shape[1]):
                 best = (name, thumb)
     if best is None:
@@ -274,6 +297,8 @@ def run_c2pa(ev: Evidence) -> Result:
     mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp",
             "tif": "image/tiff", "tiff": "image/tiff", "heic": "image/heic", "heif": "image/heif",
             "avif": "image/avif"}.get(ev.path.suffix.lower().lstrip("."), "image/jpeg")
+    if ev.is_jpeg or ev.is_png:                    # renamed files are common; trust the signature
+        mime = "image/jpeg" if ev.is_jpeg else "image/png"
     try:
         with c2pa.Reader(mime, io.BytesIO(ev.data)) as reader:
             store = json.loads(reader.json())

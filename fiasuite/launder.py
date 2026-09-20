@@ -18,10 +18,15 @@ def parse_chain(spec: str) -> list[tuple[str, float]]:
         return []
     ops = []
     for token in spec.split("+"):
+        token = token.strip()
         name = token.rstrip("0123456789.")
         if name not in ("jpeg", "resize") or name == token:
             raise ValueError(f"bad laundering step '{token}': use jpegNN or resizeF, joined with +")
-        ops.append((name, float(token[len(name):])))
+        value = float(token[len(name):])
+        low, high = (1, 100) if name == "jpeg" else (0.05, 4)
+        if not low <= value <= high:
+            raise ValueError(f"'{token}': {name} takes a value between {low} and {high}")
+        ops.append((name, value))
     return ops
 
 

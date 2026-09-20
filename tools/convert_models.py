@@ -1,6 +1,6 @@
 """Fetch the neural detectors and convert them to ONNX for the app (run in .venv-convert).
 
-    .venv-convert/Scripts/python tools/convert_models.py commfor swinv2 trufor
+    .venv-convert/Scripts/python tools/convert_models.py commfor swinv2 trufor bfree
 
 Writes models/*.onnx and merges the matching entries into models/models.json.
 PyTorch is needed only here; the app itself runs the ONNX files with ONNX Runtime.
@@ -76,10 +76,51 @@ def swinv2() -> None:
     fake = next(i for i, name in labels.items() if any(w in name for w in ("artificial", "fake", "ai", "generated")))
     size = pre["size"]["height"] if isinstance(pre["size"], dict) else int(pre["size"])
     register({"id": "swinv2", "name": "SwinV2 AI-image detector", "file": out.name, "kind": "classifier",
-              "size": size, "policy": "squash", "output": "softmax", "fake_index": fake, "weight": 0.5,
+              "size": size, "policy": "squash", "output": "softmax", "fake_index": fake,
               "cpu_optimization": "basic",       # ORT's extended fusions fail on this fp16 graph on the CPU
               "mean": pre["image_mean"], "std": pre["image_std"], "license": "Apache-2.0",
               "source": "https://huggingface.co/haywoodsloan/ai-image-detector-deploy (ONNX: LPX55/detection-model-1-ONNX)"})
+
+
+def bfree() -> None:
+    """B-Free (Guillaro et al., CVPR 2025): DINOv2 ViT with registers, trained bias-free on 504 px crops.
+    GRIP-UNINA licence: informational and nonprofit use only."""
+    import hashlib
+    import urllib.request
+
+    import timm
+    import yaml
+
+    folder = SRC / "bfree"
+    folder.mkdir(parents=True, exist_ok=True)
+    archive = folder / "BFREE_dino2reg4.zip"
+    if not archive.exists():
+        print("  downloading BFREE_dino2reg4.zip (307 MB) ...")
+        urllib.request.urlretrieve("https://www.grip.unina.it/download/prog/B-Free/weights/BFREE_dino2reg4.zip", archive)
+    digest = hashlib.md5(archive.read_bytes()).hexdigest()
+    assert digest == "f3f53fa647848b16cf81c913f148a198", f"unexpected MD5 {digest}"      # published in the B-Free README
+    with zipfile.ZipFile(archive) as z:
+        z.extractall(folder)
+    cfg = yaml.safe_load((folder / "BFREE_dino2reg4" / "config.yaml").read_text())
+    print("  config:", cfg)
+    assert cfg["arch"].startswith("timm_c5i504_"), cfg["arch"]
+    model = timm.create_model(cfg["arch"][12:], num_classes=1, pretrained=False)
+    model.set_input_size(img_size=504)
+    state = torch.load(folder / "BFREE_dino2reg4" / cfg["weights_file"], map_location="cpu", weights_only=False)["model"]
+    model.load_state_dict(state, strict=True)      # the authors' five-crop wrapper only re-orders patch embedding and cropping
+    model.eval()
+    norm = {"resnet": IMAGENET, "clip": {"mean": [0.48145466, 0.4578275, 0.40821073], "std": [0.26862954, 0.26130258, 0.27577711]},
+            "none": {"mean": [0, 0, 0], "std": [1, 1, 1]}, "xception": {"mean": [0.5] * 3, "std": [0.5] * 3}}[cfg["norm_type"]]
+    out = MODELS / "bfree_dinov2_504.onnx"
+    sample = torch.randn(1, 3, 504, 504)
+    torch.onnx.export(model, sample, str(out), input_names=["image"], output_names=["logit"], opset_version=17, dynamo=False)
+    parity(out, model, sample)
+    register({"id": "bfree", "name": "B-Free (DINOv2, 504 px crops)", "file": out.name, "kind": "classifier", "size": 504,
+              "policy": "five_crop", "output": "sigmoid", **norm,
+              # measured on 245 images from current generators and 90 photographs: AUC 0.81, 10 photographs rated
+              # generated, and adding it did not improve the ensemble (AUC 0.952 -> 0.944). Reported, not counted.
+              "weight": 0,
+              "license": "GRIP-UNINA licence (informational and nonprofit use only)", "source": "https://github.com/grip-unina/B-Free"})
 
 
 def trufor() -> None:
@@ -133,4 +174,4 @@ if __name__ == "__main__":
     MODELS.mkdir(exist_ok=True)
     for name in sys.argv[1:] or ["commfor", "swinv2", "trufor"]:
         print(f"== {name}")
-        {"commfor": commfor, "swinv2": swinv2, "trufor": trufor}[name]()
+        {"commfor": commfor, "swinv2": swinv2, "trufor": trufor, "bfree": bfree}[name]()

@@ -17,3 +17,10 @@ config.json
 vendor/
 models/*.onnx
 models/_src/
+
+# benchmark data for accuracy measurements (research-only licences, never redistributed)
+bench/
+
+# camera fingerprints built by the user
+fingerprints/
+fiasuite-error.log

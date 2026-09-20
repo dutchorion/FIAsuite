@@ -99,3 +99,22 @@ def build(folder: Path) -> dict[str, Path]:
     lattice = 1.5 * np.cos(np.pi * yy / 2) * np.cos(np.pi * xx / 4)
     out["periodic"] = save(folder / "periodic.png", np.clip(original + lattice[..., None], 0, 255).astype(np.uint8), None)
     return out
+
+
+def embed_watermark(bgr: np.ndarray, bits: np.ndarray, scale: int = 36) -> np.ndarray:
+    """Reference embedding of the 'invisible-watermark' library (method dwtDct, scales [0, 36, 36]): in every 4x4
+    block of the Haar approximation of U the largest coefficient is quantized to carry one bit."""
+    yuv = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV)
+    h, w = bgr.shape[0] // 4 * 4, bgr.shape[1] // 4 * 4
+    u = yuv[:h, :w, 1].astype(np.float64)
+    approx = (u[0::2, 0::2] + u[0::2, 1::2] + u[1::2, 0::2] + u[1::2, 1::2]) / 2
+    new, num = approx.copy(), 0
+    for i in range(approx.shape[0] // 4):
+        for j in range(approx.shape[1] // 4):
+            block = new[i * 4:i * 4 + 4, j * 4:j * 4 + 4]
+            pos = int(np.argmax(np.abs(block.flatten()[1:]))) + 1
+            y, x = divmod(pos, 4)
+            block[y, x] = (abs(block[y, x]) // scale + 0.25 + 0.5 * bits[num % len(bits)]) * scale
+            num += 1
+    yuv[:h, :w, 1] = np.clip(u + np.kron(new - approx, np.ones((2, 2))) / 2, 0, 255)
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)

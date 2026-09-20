@@ -24,3 +24,14 @@ def test_render_links_and_escapes():
     page = guide.render("ghosts", "JPEG ghosts", ["Quality step"])
     assert '<a href="https://doi.org/10.1109/TIFS.2008.2012215">' in page and "How to read it" in page
     assert "<script" not in guide.render("x", "<script>", [])
+
+
+def test_every_tool_has_example_cases_and_their_pictures_exist():
+    from fiasuite.guide_cases import CASES
+    for tool in TOOLS:
+        assert CASES.get(tool.id), tool.id
+    for tool_id, cases in CASES.items():
+        for name, text, picture in cases:
+            assert name and text
+            assert picture is None or (guide.EXAMPLES / f"{picture}.jpg").exists(), (tool_id, picture)
+    assert 'src="ela_splice.jpg"' in guide.render("ela", "Error level analysis", [])

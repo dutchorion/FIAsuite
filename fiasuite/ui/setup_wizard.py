@@ -1,6 +1,8 @@
 """First-run setup: shows which optional components are missing and installs the ticked ones."""
 from __future__ import annotations
 
+import html
+
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QProgressBar,
                                QPushButton, QVBoxLayout)
@@ -41,6 +43,7 @@ class _Install(QRunnable):
 class SetupWizard(QDialog):
     def __init__(self, parent=None, first_run: bool = False):
         super().__init__(parent)
+        self._signed_in: bool | None = None
         self.setWindowTitle(f"Set up {APP_NAME}")
         self.resize(760, 640)
         self.job: _Install | None = None
@@ -133,7 +136,9 @@ class SetupWizard(QDialog):
         needs_github = any(c.kind == "github" and not components.installed(c) for c in components.COMPONENTS)
         self.github.setVisible(needs_github)
         if needs_github:
-            signed_in = components.github_cli_token() is not None
+            if self._signed_in is None:              # starts a process: ask once per dialog, not on every refresh
+                self._signed_in = components.github_cli_token() is not None
+            signed_in = self._signed_in
             self.token.setVisible(not signed_in)
             self.github_status.setText(
                 "<b>GitHub access:</b> signed in through GitHub CLI - the two models from the private repository can "
@@ -167,7 +172,7 @@ class SetupWizard(QDialog):
     def _on_finished(self, cid: str, error: str):
         self.remaining -= 1
         if error and error != "cancelled":
-            self.errors.append(f"<b>{components.BY_ID[cid].title}:</b> {error}")
+            self.errors.append(f"<b>{components.BY_ID[cid].title}:</b> {html.escape(error)}")
         if self.remaining:
             return
         self.job = None

@@ -57,6 +57,12 @@ _BLANK = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEA
 _BREAK = ' style="page-break-before:always"'
 
 
+def soften(text) -> str:
+    """Escaped text with break opportunities inside long hashes and paths, which otherwise push a PDF table off
+    the page. They go in BEFORE escaping: inserted afterwards they split entities such as &quot;."""
+    return html.escape(_SOFT.sub("\\1\u200b", str(text)))
+
+
 def _img_tag(bgr: np.ndarray, max_w: int, max_h: int | None = None, density: float = 1.0, placeholder: bool = False) -> str:
     """<img> scaled to fit max_w x max_h (never enlarged), aspect ratio kept. `density` stores more pixels than
     the display size so that print stays sharp. placeholder: same box, no pixel data (fast layout measuring)."""
@@ -87,8 +93,7 @@ def build_html(ev: Evidence, results: dict[str, Result], verdicts: dict[str, Axi
     counters = {"image": 0, "heading": 0}
 
     def e(text) -> str:
-        text = html.escape(str(text))
-        return _SOFT.sub("\\1&#8203;", text) if pdf else text
+        return soften(text) if pdf else html.escape(str(text))
 
     def heading(level: int, text: str, new_page: bool = False) -> str:
         index = counters["heading"]
@@ -271,6 +276,8 @@ def write_pdf(target: str, ev: Evidence, results: dict[str, Result], verdicts: d
     printer.setPageLayout(QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Portrait,
                                       QMarginsF(margin_mm, margin_mm, margin_mm, margin_mm), QPageLayout.Millimeter))
     painter = QPainter(printer)
+    if not painter.isActive():                                  # locked by a PDF viewer, or not writable
+        raise OSError(f"cannot write {target}")
     scale = printer.width() / width                             # device pixels per CSS pixel
     pages = doc.pageCount()
     stamp = f"{ev.path.name}   SHA-256 {ev.hashes['sha256'][:16]}..."

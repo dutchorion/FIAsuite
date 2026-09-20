@@ -4,6 +4,11 @@ the named source (DOIs against Crossref)."""
 from __future__ import annotations
 
 import html
+from pathlib import Path
+
+from .guide_cases import CASES, EXTRA_OPTIONS, EXTRA_PITFALLS, EXTRA_READ, EXTRA_SOURCES, NEW_TOOLS
+
+EXAMPLES = Path(__file__).parent / "guide_examples"   # pictures for the cases, made by tools/make_guide_examples.py
 
 # shared references
 FARID_BOOK = ("H. Farid, Photo Forensics, MIT Press 2016 (book)", "https://mitpress.mit.edu/9780262537001/photo-forensics/")
@@ -251,15 +256,26 @@ GUIDE: dict[str, dict] = {
                  "Agreement matters more than any single number.",
                  "The maps show which regions look generated: one hot region in a cold image suggests a local AI edit "
                  "(inpainting, generative fill, face swap).",
-                 "Community Forensics carries full weight. The SwinV2 detector counts half: on this project's checks it "
-                 "missed generated samples and rated rendered (CGI) wallpapers as generated."],
+                 "The ensemble is the mean of the detectors' log-odds, so one network that is confidently wrong cannot "
+                 "simply cancel one that is confidently right. Community Forensics and SwinV2 count equally.",
+                 "B-Free, if installed, is listed for information and not counted: it excels on unprocessed "
+                 "generator output in its authors' tests, but on this project's benchmark it rated 10 of 90 photographs as "
+                 "generated and did not improve the ensemble."],
         "options": {"Regions analysed": "Number of windows for the maps. More = finer map, proportionally slower."},
-        "pitfalls": ["Independent 2026 benchmarks put the best open detectors near 78 % accuracy overall and at 18-30 % "
+        "pitfalls": ["Measured by this program on 245 images from 16 current generators and 180 photographs: the "
+                     "ensemble rated 68% of the generated images above 50% and none of the photographs. By generator: "
+                     "Midjourney 7 28/30, GPT-image-1.5 23/30, Veo 3 frames 17/28, Z-Image Turbo 14/30, Flux.2 2/30. "
+                     "A generator the networks never saw can pass almost unnoticed.",
+                     "Independent 2026 benchmarks put the best open detectors near 78 % accuracy overall and at 18-30 % "
                      "on the newest commercial generators. A low score does NOT establish authenticity.",
                      "Recompression, resizing and screenshots lower accuracy further. Use Calibrate on your own material."],
         "sources": [("J. Park & A. Owens, Community Forensics (paper)", "https://arxiv.org/abs/2411.04125"),
                     ("Community Forensics model", "https://huggingface.co/OwensLab/commfor-model-384"),
-                    ("SwinV2 AI-image detector model", "https://huggingface.co/haywoodsloan/ai-image-detector-deploy"), BENCHMARK],
+                    ("SwinV2 AI-image detector model", "https://huggingface.co/haywoodsloan/ai-image-detector-deploy"),
+                    ("F. Guillaro et al., B-Free: A Bias-Free Training Paradigm for More General AI-generated Image "
+                     "Detection, CVPR 2025 (code, weights and licence)", "https://github.com/grip-unina/B-Free"),
+                    ("OpenFake - the benchmark of current generators used for the figures above",
+                     "https://huggingface.co/datasets/ComplexDataLab/OpenFake"), BENCHMARK],
     },
     "trufor": {
         "what": "TruFor combines the image with a learned camera-noise fingerprint (Noiseprint++) in a transformer and "
@@ -374,6 +390,17 @@ GUIDE: dict[str, dict] = {
 }
 
 
+GUIDE.update(NEW_TOOLS)
+for _tool, _extra in EXTRA_OPTIONS.items():
+    GUIDE[_tool].setdefault("options", {}).update(_extra)
+for _tool, _extra in EXTRA_READ.items():
+    GUIDE[_tool]["read"] = GUIDE[_tool]["read"] + _extra
+for _tool, _extra in EXTRA_PITFALLS.items():
+    GUIDE[_tool]["pitfalls"] = GUIDE[_tool].get("pitfalls", []) + _extra
+for _tool, _extra in EXTRA_SOURCES.items():
+    GUIDE[_tool]["sources"] = GUIDE[_tool]["sources"] + _extra
+
+
 def render(tool_id: str, title: str, option_labels: list[str]) -> str:
     """HTML for the guide window. option_labels: the tool's parameters, so undocumented ones are still listed."""
     g = GUIDE.get(tool_id, {})
@@ -381,6 +408,12 @@ def render(tool_id: str, title: str, option_labels: list[str]) -> str:
     out = [f"<h2>{e(title)}</h2>", f"<p>{e(g.get('what', ''))}</p>"]
     if g.get("read"):
         out.append("<h3>How to read it</h3><ul>" + "".join(f"<li>{e(t)}</li>" for t in g["read"]) + "</ul>")
+    if CASES.get(tool_id):
+        out.append("<h3>Typical cases</h3>")
+        for name, text, picture in CASES[tool_id]:
+            out.append(f"<p><b>{e(name)}.</b> {e(text)}</p>")
+            if picture and (EXAMPLES / f"{picture}.jpg").exists():
+                out.append(f'<p><img src="{picture}.jpg" width="700"></p>')
     options = g.get("options", {})
     labels = list(options) + [o for o in option_labels if not any(o in key or key in o for key in options)]
     if labels:

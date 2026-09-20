@@ -7,7 +7,9 @@ setlocal EnableExtensions
 title FIASuite
 cd /d "%~dp0"
 
-if exist ".venv\Scripts\pythonw.exe" goto :launch
+if exist ".venv\.ready" goto :launch
+rem  an environment without the marker was interrupted while installing: finish it instead of starting a broken one
+if exist ".venv\Scripts\python.exe" goto :packages
 
 echo.
 echo   FIASuite - first start on this PC
@@ -48,9 +50,11 @@ echo   Using Python:  %PY%
 echo   Creating the environment ...
 %PY% -m venv .venv
 if errorlevel 1 goto :venv_failed
+:packages
 echo   Downloading and installing the required packages (about 400 MB, this takes a few minutes) ...
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r requirements.txt
 if errorlevel 1 goto :pip_failed
+echo ready> ".venv\.ready"
 echo.
 echo   Done. Starting FIASuite ...
 echo   (ExifTool and the detection models are offered by the setup wizard inside the program.)

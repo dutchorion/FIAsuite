@@ -22,10 +22,15 @@ def folder_mb(path: Path) -> float:
 # PyInstaller wipes the output folders: carry the user's settings (API keys) over the rebuild
 saved = {d: (d / "config.json").read_bytes() for d in (FULL, SLIM) if (d / "config.json").exists()}
 
+for folder, data in saved.items():                 # a failed build must not lose them either
+    (ROOT / "build").mkdir(exist_ok=True)
+    (ROOT / "build" / f"{folder.name}.config.json.bak").write_bytes(data)
+
 subprocess.check_call([
     sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", "FIASuite",
     "--icon", str(ROOT / "assets" / "fiasuite.ico"),
     "--collect-all", "c2pa", "--collect-binaries", "onnxruntime", "--collect-all", "pillow_heif",
+    "--add-data", f"{ROOT / 'fiasuite' / 'guide_examples'};fiasuite/guide_examples",    # pictures of the guide windows
     "--exclude-module", "sympy", "--exclude-module", "pywt", "--exclude-module", "pytest",
     "--exclude-module", "tkinter", "--exclude-module", "matplotlib",
     "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build"), "--specpath", str(ROOT / "build"),
@@ -51,5 +56,6 @@ for folder in ("vendor", "models"):
 
 for folder, data in saved.items():
     (folder / "config.json").write_bytes(data)
+    print(f"\nWARNING: {folder.name} contains your config.json (API keys). Delete it before sharing that folder.")
 
 print(f"\nSlim build: {SLIM}  ({folder_mb(SLIM):.0f} MB)\nFull build: {FULL}  ({folder_mb(FULL):.0f} MB)")

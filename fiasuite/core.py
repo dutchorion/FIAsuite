@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import threading
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -72,6 +73,7 @@ class Evidence:
         self.is_jpeg = self.data[:2] == b"\xff\xd8"
         self.is_png = self.data[:8] == b"\x89PNG\r\n\x1a\n"
         self.cache: dict = {}  # per-evidence memo shared between analyses
+        self.lock = threading.RLock()  # analyses run in parallel: fill shared cache entries once, not once per thread
 
     @cached_property
     def luma(self) -> np.ndarray:
@@ -94,7 +96,7 @@ class Evidence:
 def _decode(data: bytes, suffix: str) -> np.ndarray:
     buf = np.frombuffer(data, np.uint8)
     img = cv2.imdecode(buf, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-    if img is None and suffix in {".heic", ".heif", ".avif"}:
+    if img is None:                                # HEIC/AVIF, also when renamed to .jpg by a messenger
         img = _decode_heif(data)
     if img is None:
         raise ValueError("Unsupported or corrupt image file")

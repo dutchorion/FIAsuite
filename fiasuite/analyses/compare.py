@@ -12,11 +12,13 @@ from .metadata import read_metadata
 _SKIP_GROUPS = ("System", "File", "ExifTool", "Composite")
 
 
-def _align(ref: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, str]:
-    """Warp ref into target's frame using ORB matches; fall back to plain resizing."""
+def _align(ref: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray, str]:
+    """Warp ref into target's frame using ORB matches; fall back to plain resizing.
+    Returns (aligned reference, mask of target pixels the reference covers, description)."""
     h, w = target.shape[:2]
+    everywhere = np.ones((h, w), bool)
     if ref.shape[:2] == (h, w):
-        return ref, "same dimensions, compared pixel by pixel"
+        return ref, everywhere, "same dimensions, compared pixel by pixel"
     orb = cv2.ORB_create(5000)
     ka, da = orb.detectAndCompute(cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY), None)
     kb, db = orb.detectAndCompute(cv2.cvtColor(target, cv2.COLOR_BGR2GRAY), None)
@@ -27,18 +29,20 @@ def _align(ref: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, str]:
             dst = np.float32([kb[m.trainIdx].pt for m in matches])
             H, inliers = cv2.findHomography(src, dst, cv2.RANSAC, 3.0)
             if H is not None and inliers.sum() >= 12:
-                return cv2.warpPerspective(ref, H, (w, h), flags=cv2.INTER_LINEAR), \
+                covered = cv2.warpPerspective(np.full(ref.shape[:2], 255, np.uint8), H, (w, h), flags=cv2.INTER_NEAREST)
+                return cv2.warpPerspective(ref, H, (w, h), flags=cv2.INTER_LINEAR), covered == 255, \
                     f"registered with {int(inliers.sum())} feature matches (crop / scale / perspective compensated)"
-    return cv2.resize(ref, (w, h), interpolation=cv2.INTER_AREA), "no registration possible: reference simply resized"
+    return cv2.resize(ref, (w, h), interpolation=cv2.INTER_AREA), everywhere, \
+        "no registration possible: reference simply resized"
 
 
 def compare(ev: Evidence, ref: Evidence, amplify: int = 8) -> Result:
-    aligned, how = _align(ref.bgr, ev.bgr)
+    aligned, covered, how = _align(ref.bgr, ev.bgr)
     diff = cv2.absdiff(cv2.GaussianBlur(ev.bgr, (0, 0), 1.0), cv2.GaussianBlur(aligned, (0, 0), 1.0)).max(axis=2)
-    covered = aligned.max(axis=2) > 0                          # outside the warped reference nothing can be compared
-    changed = (diff > 24) & covered
-    frac = coherent_fraction(cv2.resize(changed.astype(np.uint8), None, fx=0.125, fy=0.125,
-                                        interpolation=cv2.INTER_AREA) > 0)
+    changed = (diff > 24) & covered                            # outside the warped reference nothing can be compared
+    # 8x8 cells in which at least a quarter of the pixels changed: keeps small edits, drops single-pixel speckle
+    cells = cv2.resize(changed.astype(np.float32), None, fx=0.125, fy=0.125, interpolation=cv2.INTER_AREA) >= 0.25
+    frac = coherent_fraction(cells, 2)
     res = Result()
     res.views["Difference"] = cv2.applyColorMap(np.clip(diff.astype(np.int32) * amplify, 0, 255).astype(np.uint8), cv2.COLORMAP_INFERNO)
     res.views["Reference (aligned)"] = aligned

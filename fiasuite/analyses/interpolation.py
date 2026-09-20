@@ -24,7 +24,7 @@ def _spectrum_mask(n: int) -> np.ndarray:
     return keep
 
 
-def resampling(ev: Evidence, window: int = 128) -> Result:
+def resampling(ev: Evidence, window: int = 128, threshold: float = 6.0) -> Result:
     n = int(window)
     # Interpolation makes the variance of the second derivative periodic (Gallagher 2005,
     # Mahdian & Saic 2008); its magnitude separates better than the p-map on textured content.
@@ -57,7 +57,7 @@ def resampling(ev: Evidence, window: int = 128) -> Result:
     avg = np.log1p(mean_spec / max(valid.sum(), 1))
     res.views["Mean p-map spectrum"] = cv2.resize(heatmap(avg, None, np.percentile(avg, 50), avg.max()), (512, 512),
                                                   interpolation=cv2.INTER_NEAREST)
-    hits = ratio > 6
+    hits = ratio > float(threshold)
     share = float(hits.sum() / max(valid.sum(), 1))
     local = coherent_fraction(hits, 2)
     res.table = [("Windows with spectral peaks", f"{share:.1%}"), ("Median peak ratio", f"{np.median(ratio[valid]):.1f}" if valid.any() else "-")]
@@ -66,7 +66,11 @@ def resampling(ev: Evidence, window: int = 128) -> Result:
         res.findings.append(Finding(NOTE, "Whole image has been resampled",
             "Periodic interpolation correlations everywhere: the image was resized or rotated (usual for web and "
             "social-media copies)."))
-    elif local > 0.01:
+    elif local > 0.01 and local <= 0.025:
+        res.score = 0.25                           # 6 of 100 untouched camera photos reach this level: fine regular texture
+        res.findings.append(Finding(NOTE, "A few windows with interpolation-like peaks",
+            f"{local:.1%} of the image. At this level regular texture is as likely a cause as a resized insert."))
+    elif local > 0.025:
         res.score = float(np.clip(0.5 + local * 5, 0, 0.95))
         res.findings.append(Finding(WARN, "Locally resampled region",
             f"About {local:.1%} of the image shows interpolation peaks that the rest lacks: an object was scaled or "
@@ -113,7 +117,11 @@ def cfa(ev: Evidence, block: int = 32) -> Result:
     res.findings.append(Finding(INFO, "Bayer demosaicing traces present",
                                 "The image still carries its sensor interpolation pattern: consistent with a camera original."))
     res.score = float(np.clip(frac * 6, 0.02, 0.9))
-    if frac > 0.03:
+    if 0.03 < frac <= 0.065:                       # 9 of 100 untouched photos exceeded 3%, 2 of 100 exceeded 6.5%
+        res.score = 0.25
+        res.findings.append(Finding(NOTE, "Small area with weak demosaicing traces",
+            f"{frac:.1%} of the image. Out-of-focus, saturated and very dark areas lose the trace naturally."))
+    elif frac > 0.065:
         res.findings.append(Finding(WARN, "Region without demosaicing traces",
             f"{frac:.1%} of the image lacks the Bayer pattern found elsewhere: content that did not come through this "
             "camera's sensor pipeline (paste, inpainting, heavy retouching)."))

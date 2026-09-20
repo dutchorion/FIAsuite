@@ -88,6 +88,8 @@ def parse(data: bytes) -> dict:
         elif marker == 0xDB:
             _read_dqt(payload, out["qtables"])
         elif marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC9, 0xCA):
+            if len(payload) < 6 or len(payload) < 6 + 3 * payload[5]:
+                break                              # truncated frame header: nothing reliable follows
             prec, h, w, nc = struct.unpack(">BHHB", payload[:6])
             comps = [(payload[6 + 3 * i], payload[7 + 3 * i] >> 4, payload[7 + 3 * i] & 15, payload[8 + 3 * i])
                      for i in range(nc)]
@@ -95,7 +97,7 @@ def parse(data: bytes) -> dict:
                           "progressive": marker in (0xC2, 0xCA)}
         elif marker == 0xFE:
             out["comments"].append(payload.decode("latin-1", "replace"))
-        elif marker == 0xDD:
+        elif marker == 0xDD and len(payload) >= 2:
             out["restart_interval"] = struct.unpack(">H", payload[:2])[0]
         out["segments"].append((pos, name, length + 2))
         pos += 2 + length
@@ -144,11 +146,17 @@ def subsampling(sof: dict) -> str:
             (4, 1): "4:1:1"}.get((h0 // max(h1, 1), v0 // max(v1, 1)), f"{h0}x{v0}/{h1}x{v1}")
 
 
+def parsed(ev: Evidence) -> dict:
+    if "jpeg" not in ev.cache:
+        ev.cache["jpeg"] = parse(ev.data)
+    return ev.cache["jpeg"]
+
+
 def luma_qtable(ev: Evidence) -> np.ndarray | None:
     """Luminance quantization table of a JPEG, or None."""
     if not ev.is_jpeg:
         return None
-    info = ev.cache.setdefault("jpeg", parse(ev.data))
+    info = parsed(ev)
     sof = info["sof"]
     tq = sof["components"][0][3] if sof else 0
     return info["qtables"].get(tq)
@@ -159,7 +167,7 @@ def run(ev: Evidence) -> Result:
     if not ev.is_jpeg:
         res.findings.append(Finding(INFO, "Not a JPEG file", "Container analysis applies to JPEG only."))
         return res
-    info = ev.cache.setdefault("jpeg", parse(ev.data))
+    info = parsed(ev)
     sof = info["sof"]
     if sof:
         res.table += [("Frame type", sof["type"]), ("Dimensions", f"{sof['width']} x {sof['height']}"),

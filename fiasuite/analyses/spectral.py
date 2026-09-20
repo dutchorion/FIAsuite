@@ -20,6 +20,7 @@ from ..core import INFO, NOTE, WARN, Evidence, Finding, Result, heatmap, plot
 
 RESIDUALS = ["Wiener (adaptive)", "Cross-difference", "Gaussian", "Median"]
 CHANNELS = ["Luminance", "Red", "Green", "Blue"]
+COLORMAPS = {"Bone": cv2.COLORMAP_BONE, "Grey": None, "Inferno": cv2.COLORMAP_INFERNO, "Viridis": cv2.COLORMAP_VIRIDIS}
 EPS = 1e-9
 # BGR marker colours per peak class
 CLASS_COLORS = {"other": (40, 180, 255), "jpeg_lattice": (255, 150, 60), "axis": (150, 150, 150),
@@ -32,21 +33,22 @@ def _plane(ev: Evidence, channel: str) -> np.ndarray:
     return ev.bgr[:, :, {"Blue": 0, "Green": 1, "Red": 2}[channel]].astype(np.float32)
 
 
-def _residual(plane: np.ndarray, method: str):
-    """Returns tile(y, x, n) -> residual of that tile."""
+def _residual(plane: np.ndarray, method: str, strength: float = 1.2):
+    """Returns tile(y, x, n) -> residual of that tile. strength: Gaussian sigma in pixels
+    (Wiener, Gaussian) or the median window (3 below 1.5, else 5)."""
     if method == "Cross-difference":               # Synthbuster; blind to purely horizontal/vertical structure
         full = plane[:-1, :-1] + plane[1:, 1:] - plane[1:, :-1] - plane[:-1, 1:]
         return lambda y, x, n: full[y:y + n, x:x + n]
     if method == "Gaussian":
-        full = plane - cv2.GaussianBlur(plane, (0, 0), 1.2, borderType=cv2.BORDER_REPLICATE)
+        full = plane - cv2.GaussianBlur(plane, (0, 0), strength, borderType=cv2.BORDER_REPLICATE)
         return lambda y, x, n: full[y:y + n, x:x + n]
     if method == "Median":
-        full = plane - cv2.medianBlur(plane, 3)
+        full = plane - cv2.medianBlur(plane, 3 if strength < 1.5 else 5)
         return lambda y, x, n: full[y:y + n, x:x + n]
     # Lee / adaptive Wiener with a Gaussian window: its transfer function is isotropic,
     # so the filter adds no cross or lobes of its own to the spectrum
-    mu = cv2.GaussianBlur(plane, (0, 0), 1.2, borderType=cv2.BORDER_REPLICATE)
-    var = np.maximum(cv2.GaussianBlur(plane * plane, (0, 0), 1.2, borderType=cv2.BORDER_REPLICATE) - mu * mu, 0)
+    mu = cv2.GaussianBlur(plane, (0, 0), strength, borderType=cv2.BORDER_REPLICATE)
+    var = np.maximum(cv2.GaussianBlur(plane * plane, (0, 0), strength, borderType=cv2.BORDER_REPLICATE) - mu * mu, 0)
 
     def tile(y, x, n):
         v, m, p = var[y:y + n, x:x + n], mu[y:y + n, x:x + n], plane[y:y + n, x:x + n]
@@ -56,14 +58,15 @@ def _residual(plane: np.ndarray, method: str):
     return tile
 
 
-def averaged_spectrum(plane: np.ndarray, n: int, method: str, overlap: bool = False, limit: int = 300):
-    """(shifted amplitude, tiles used, tiles skipped, residual of the first used tile)"""
+def averaged_spectrum(plane: np.ndarray, n: int, method: str, overlap: bool = False, limit: int = 300,
+                      strength: float = 1.2):
+    """(shifted amplitude, tiles used, tiles skipped, residual of the first used tile). limit 0 = every tile."""
     h, w = plane.shape[0] - 1, plane.shape[1] - 1
     step = n // 2 if overlap else n
     origins = [(y, x) for y in range(0, h - n + 1, step) for x in range(0, w - n + 1, step)]
-    if len(origins) > limit:
+    if limit and len(origins) > limit:
         origins = [origins[int((k + 0.5) * len(origins) / limit)] for k in range(limit)]
-    tile = _residual(plane, method)
+    tile = _residual(plane, method, strength)
     hann = np.outer(np.hanning(n), np.hanning(n))
     acc, used, skipped, keep = np.zeros((n, n)), 0, 0, None
     for y, x in origins:
@@ -128,27 +131,37 @@ def find_peaks(log_flat, rr, u, v, n: int, jpeg: bool, z_min: float = 8.0, ratio
     return sorted(peaks, key=lambda p: -p["z"])
 
 
-def annotated(log_flat: np.ndarray, peaks: list[dict]) -> np.ndarray:
+def _shade(values: np.ndarray, lo: float, hi: float, colormap: str) -> np.ndarray:
+    cmap = COLORMAPS[colormap]
+    if cmap is not None:
+        return heatmap(values, None, lo, hi, cmap)
+    grey = np.clip((values - lo) / max(hi - lo, EPS) * 255, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)
+
+
+def annotated(log_flat: np.ndarray, peaks: list[dict], colormap: str = "Bone") -> np.ndarray:
     n = log_flat.shape[0]
-    view = heatmap(log_flat, None, np.percentile(log_flat, 2), np.percentile(log_flat, 99.95), cv2.COLORMAP_BONE)
+    view = _shade(log_flat, np.percentile(log_flat, 2), np.percentile(log_flat, 99.95), colormap)
     for p in peaks:
         for x, y in ((p["x"], p["y"]), (n - p["x"], n - p["y"])):
             cv2.circle(view, (x, y), 7, CLASS_COLORS[p["class"]], 1, cv2.LINE_AA)
     return cv2.resize(view, (768, 768), interpolation=cv2.INTER_NEAREST) if n < 768 else view
 
 
-def spectrum(ev: Evidence, tile: int = 512, residual: str = "Wiener (adaptive)", channel: str = "Luminance",
-             overlap: bool = False) -> Result:
+def spectrum(ev: Evidence, tile: int = 512, residual: str = "Wiener (adaptive)", strength: float = 1.2,
+             channel: str = "Luminance", overlap: bool = False, tile_limit: int = 300, auto_tile: bool = True,
+             peak_z: float = 8.0, peak_ratio: float = 1.5, colormap: str = "Bone") -> Result:
     n = int(tile)
-    while n > 128 and ((ev.height - 1) // n) * ((ev.width - 1) // n) < 8:   # averaging needs several tiles
+    while auto_tile and n > 128 and ((ev.height - 1) // n) * ((ev.width - 1) // n) < 8:   # averaging needs several tiles
         n //= 2
     res = Result()
-    amp, used, skipped, first = averaged_spectrum(_plane(ev, channel), n, residual, bool(overlap))
+    amp, used, skipped, first = averaged_spectrum(_plane(ev, channel), n, residual, bool(overlap), int(tile_limit),
+                                                  float(strength))
     if amp is None:
         res.findings.append(Finding(INFO, "Image too small, flat or clipped for spectral analysis"))
         return res
     log_flat, radial, rr, u, v = flatten(amp)
-    peaks = find_peaks(log_flat, rr, u, v, n, ev.is_jpeg)
+    peaks = find_peaks(log_flat, rr, u, v, n, ev.is_jpeg, float(peak_z), float(peak_ratio))
     other = [p for p in peaks if p["class"] == "other"]
     count = len(other)
 
@@ -164,8 +177,10 @@ def spectrum(ev: Evidence, tile: int = 512, residual: str = "Wiener (adaptive)",
     lum_radial = flatten(lum)[1][1:] if lum is not None else radial[1:]
     slope, intercept = np.polyfit(np.log(r[mid]), np.log(lum_radial[mid] + EPS), 1)
 
-    res.views["Flattened spectrum (peaks marked)"] = annotated(log_flat, peaks)
-    res.views["Spectrum"] = cv2.resize(heatmap(np.log10(amp + EPS), None), (768, 768), interpolation=cv2.INTER_NEAREST)
+    res.views["Flattened spectrum (peaks marked)"] = annotated(log_flat, peaks, colormap)
+    log_amp = np.log10(amp + EPS)
+    res.views["Spectrum"] = cv2.resize(_shade(log_amp, float(log_amp.min()), float(log_amp.max()), colormap),
+                                       (768, 768), interpolation=cv2.INTER_NEAREST)
     res.views["Radial profile"] = plot([("log10 amplitude, per-radius median", np.log10(radial[1:] + EPS), (120, 220, 255))],
                                        "Radial profile of the residual spectrum", xlabels=("low frequency", "Nyquist"))
     res.views["Angular profile"] = plot([("relative energy by orientation", angular, (120, 255, 160))],
@@ -176,7 +191,8 @@ def spectrum(ev: Evidence, tile: int = 512, residual: str = "Wiener (adaptive)",
     by_class = {c: sum(p["class"] == c for p in peaks) for c in CLASS_COLORS}
     res.metrics = {"n_peaks_other": count, "max_peak_ratio_other": max((p["ratio"] for p in other), default=1.0),
                    "angular_anisotropy": round(anisotropy, 4)}
-    res.table = [("Tiles averaged", f"{used} x {n} px  ({skipped} flat or clipped tiles skipped)"),
+    res.table = [("Tiles averaged", f"{used} x {n} px  ({skipped} flat or clipped tiles skipped)"
+                  + (f"; tile reduced from {int(tile)} px to fit the image" if n != int(tile) else "")),
                  ("Unexplained peaks (amber)", str(count)),
                  ("JPEG 8x8 lattice peaks (blue)", f"{by_class['jpeg_lattice']}  - compression, ignored"),
                  ("On-axis peaks (grey)", f"{by_class['axis']}  - ignored"),
@@ -188,7 +204,10 @@ def spectrum(ev: Evidence, tile: int = 512, residual: str = "Wiener (adaptive)",
                    f"{p['ratio']}x background, z = {p['z']}") for i, p in enumerate(other[:12])]
     if used < 8:
         res.findings.append(Finding(INFO, "Few tiles averaged", "The spectrum is noisy and weak peaks will be missed."))
-    if count >= 2:                                 # each peak stands for a point-symmetric pair
+    strongest = max((p["ratio"] for p in other), default=1.0)
+    # each peak stands for a point-symmetric pair. Weak peaks (under 4x background) come from fine scene texture:
+    # with this rule 1 of 280 photographs was flagged instead of 8, and none of the 13 generated images was lost
+    if count >= 2 and strongest >= 4:
         res.score = float(np.clip(0.5 + count / 20, 0, 0.9))
         res.findings.append(Finding(WARN, f"{count} unexplained periodic peaks in the noise spectrum",
             "A regular lattice of isolated peaks (amber circles) is the fingerprint of learned up-sampling in image "

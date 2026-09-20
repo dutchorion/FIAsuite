@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
                                QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, calibrate, guide, launder
-from ..analyses import compare, online
+from ..analyses import compare, online, prnu
 from ..core import IMAGE_EXTS, SEVERITY_ORDER, Evidence
 from ..report import build_html, build_json, ordered, title_of, write_pdf
 from ..tools import BY_ID, TOOLS, defaults
@@ -23,6 +23,7 @@ from . import theme
 from .viewer import ImageView
 from .worker import Job, Signals
 
+FORBIDDEN = '\\/:*?"<>|'                            # characters Windows refuses in file names
 SLOW_TOOLS = {"ghosts", "trufor", "clone_blocks", "resampling", "clone_kp"}
 
 
@@ -96,18 +97,26 @@ class ReportDialog(QDialog):
                                                 f"{kind.upper()} (*.{kind})")
         if not target:
             return
+        # the summary verdict always reflects everything that was run; the selection limits the detail sections
+        args = (ev, self.main.results, summarize(self.main.results), self.main.result_params,
+                self.examiner.text(), self.notes.toPlainText(), self.selected())
+        self.setCursor(Qt.WaitCursor)
+        try:
+            if kind == "json":
+                Path(target).write_text(json.dumps(build_json(*args), indent=1, ensure_ascii=False), encoding="utf-8")
+            elif kind == "html":
+                Path(target).write_text(build_html(*args), encoding="utf-8")
+            else:
+                write_pdf(target, *args)
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"The report could not be written to\n{target}\n\n{exc}\n\n"
+                                "Is the file open in another program, or the folder read-only?")
+            return
+        finally:
+            self.unsetCursor()
         cfg = online.load_config()
         cfg["examiner"] = self.examiner.text()
         online.save_config(cfg)
-        # the summary verdict always reflects everything that was run; the selection limits the detail sections
-        args = (ev, self.main.results, summarize(self.main.results), self.main.params,
-                self.examiner.text(), self.notes.toPlainText(), self.selected())
-        if kind == "json":
-            Path(target).write_text(json.dumps(build_json(*args), indent=1, ensure_ascii=False), encoding="utf-8")
-        elif kind == "html":
-            Path(target).write_text(build_html(*args), encoding="utf-8")
-        else:
-            write_pdf(target, *args)
         self.accept()
         QMessageBox.information(self.main, APP_NAME, f"Report saved to\n{target}")
 
@@ -174,17 +183,17 @@ class CompareWindow(QMainWindow):
 
 def triage(path: str, thorough: bool) -> dict:
     ev = Evidence(path)
-    results = {}
+    results, failed = {}, []
     for tool in TOOLS:
         if tool.auto and (thorough or tool.id not in SLOW_TOOLS):
             try:
                 results[tool.id] = tool.fn(ev, **defaults(tool))
             except Exception:
-                pass
+                failed.append(tool.title)
     verdicts = summarize(results)
     flagged = [(f.severity, f.title) for r in results.values() for f in r.findings]
     top = max(flagged, key=lambda f: SEVERITY_ORDER[f[0]], default=("info", ""))
-    return {"path": path, "verdicts": verdicts, "top": top}
+    return {"path": path, "verdicts": verdicts, "top": top, "failed": failed}
 
 
 class NumberItem(QTableWidgetItem):
@@ -243,6 +252,7 @@ class BatchWindow(QMainWindow):
             return
         pattern = "**/*" if self.recursive.isChecked() else "*"
         files = sorted(str(p) for p in Path(folder).glob(pattern) if p.suffix.lower() in IMAGE_EXTS and p.is_file())
+        self.pool.clear()                            # a previous folder that is still queued
         self.generation += 1
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
@@ -274,12 +284,18 @@ class BatchWindow(QMainWindow):
                 item.setData(Qt.UserRole, v.score)
                 item.setForeground(QColor(v.color))
                 self.table.setItem(row, col, item)
-            self.table.setItem(row, 4, QTableWidgetItem(info["top"][1]))
+            note = f"   [failed: {', '.join(info['failed'])}]" if info["failed"] else ""
+            self.table.setItem(row, 4, QTableWidgetItem(info["top"][1] + note))
         if self.progress.value() >= self.progress.maximum():
             self.table.setSortingEnabled(True)
             self.table.sortItems(1, Qt.DescendingOrder)
             self.table.resizeColumnsToContents()
             self.export.setEnabled(True)
+
+    def closeEvent(self, event):
+        self.pool.clear()
+        self.generation += 1
+        super().closeEvent(event)
 
     def _open_row(self, row, _col):
         self.main.open_file(self.table.item(row, 0).data(Qt.UserRole))
@@ -372,13 +388,17 @@ class CalibrationWindow(QMainWindow):
             return
         sets = {}
         for kind, edit in (("real", self.real), ("fake", self.fake)):
-            folder = Path(edit.text())
-            sets[kind] = sorted(str(p) for p in folder.rglob("*") if p.suffix.lower() in IMAGE_EXTS) if folder.is_dir() else []
+            folder = Path(edit.text().strip())
+            usable = bool(edit.text().strip()) and folder.is_absolute() and folder.is_dir()   # '' would mean the current folder
+            sets[kind] = sorted(str(p) for p in folder.rglob("*")
+                                if p.suffix.lower() in IMAGE_EXTS and p.is_file()) if usable else []
         if not sets["real"] or not sets["fake"]:
             QMessageBox.warning(self, APP_NAME, "Both folders must contain images.")
             return
         self.generation += 1
         self.records = {"real": [], "fake": []}
+        self.failures: list[str] = []
+        self.pool.clear()
         self.progress.setRange(0, len(sets["real"]) + len(sets["fake"]))
         self.progress.setValue(0)
         self.start.setEnabled(False)
@@ -387,11 +407,18 @@ class CalibrationWindow(QMainWindow):
             for path in paths:
                 self.pool.start(Job(kind, calibrate.measure, (path, tool_id, self.chain_list), {}, self.generation, self.signals))
 
-    def _done(self, kind, record, _error, generation):
+    def closeEvent(self, event):
+        self.pool.clear()
+        self.generation += 1
+        super().closeEvent(event)
+
+    def _done(self, kind, record, error, generation):
         if generation != self.generation:
             return
         if record is not None:
             self.records[kind].append(record)
+        else:
+            self.failures.append(error.strip().splitlines()[-1] if error.strip() else "unknown error")
         self.progress.setValue(self.progress.value() + 1)
         if self.progress.value() < self.progress.maximum():
             return
@@ -410,6 +437,9 @@ class CalibrationWindow(QMainWindow):
                 self.table.setItem(i, col, item)
         self.table.resizeColumnsToContents()
         self.export.setEnabled(bool(self.rows))
+        if self.failures:
+            QMessageBox.warning(self, APP_NAME, f"{len(self.failures)} image(s) could not be measured and are not in "
+                                f"the table. First error:\n\n{self.failures[0]}")
 
     def export_csv(self):
         target, _ = QFileDialog.getSaveFileName(self, "Export CSV", "calibration.csv", "CSV (*.csv)")
@@ -420,6 +450,118 @@ class CalibrationWindow(QMainWindow):
                 writer.writerows(self.rows)
 
 
+# ---------------------------------------------------------------------- camera fingerprints (PRNU)
+
+class FingerprintWindow(QMainWindow):
+    """Build and manage sensor-noise fingerprints; they are used by the 'Camera fingerprint (PRNU)' tool."""
+
+    def __init__(self, main):
+        super().__init__(main)
+        self.main = main
+        self.setWindowTitle("Camera fingerprints (PRNU)")
+        self.resize(760, 560)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        intro = QLabel("Every image sensor leaves its own fixed noise pattern in each photo. Collect 20 or more photos "
+                       "taken with ONE camera - ideally bright, evenly lit, low-detail subjects such as sky or a wall, "
+                       "straight from the camera at full resolution and never edited or resized - and build a "
+                       "fingerprint from them. The 'Camera fingerprint (PRNU)' tool then tests whether an image came "
+                       "from that camera and which regions lack its pattern.")
+        intro.setWordWrap(True)
+        intro.setObjectName("muted")
+        lay.addWidget(intro)
+        form = QFormLayout()
+        self.folder, self.name = QLineEdit(), QLineEdit()
+        self.name.setPlaceholderText("e.g. Canon 60D - serial 1234")
+        row = QHBoxLayout()
+        browse = QPushButton("Browse ...")
+        browse.clicked.connect(lambda: self.folder.setText(QFileDialog.getExistingDirectory(self, "Folder") or self.folder.text()))
+        row.addWidget(self.folder, 1)
+        row.addWidget(browse)
+        form.addRow("Reference photos", row)
+        form.addRow("Fingerprint name", self.name)
+        lay.addLayout(form)
+        self.build_button = QPushButton("Build fingerprint")
+        self.build_button.clicked.connect(self.build)
+        self.progress = QProgressBar()
+        self.progress.hide()
+        self.message = QLabel("")
+        self.message.setWordWrap(True)
+        self.message.setTextFormat(Qt.PlainText)
+        lay.addWidget(self.build_button)
+        lay.addWidget(self.progress)
+        lay.addWidget(self.message)
+        label = QLabel("Stored fingerprints")
+        label.setObjectName("h2")
+        lay.addWidget(label)
+        self.list = QListWidget()
+        lay.addWidget(self.list, 1)
+        remove = QPushButton("Delete selected fingerprint")
+        remove.clicked.connect(self.remove)
+        lay.addWidget(remove)
+        self.setCentralWidget(body)
+        self.signals = Signals()
+        self.signals.done.connect(self._done)
+        self.signals.progress.connect(lambda done, total: (self.progress.setRange(0, total), self.progress.setValue(done)))
+        self.cancelled = False
+        self.refresh()
+
+    def refresh(self):
+        self.list.clear()
+        for name in prnu.stored()[1:]:
+            k, info = prnu.load_fingerprint(name)
+            self.list.addItem(f"{name}   -   {info['count']} photos, {k.shape[1]} x {k.shape[0]} px")
+            self.list.item(self.list.count() - 1).setData(Qt.UserRole, name)
+
+    def build(self):
+        folder, name = Path(self.folder.text().strip()), self.name.text().strip()
+        if not self.folder.text().strip() or not folder.is_dir():
+            QMessageBox.warning(self, APP_NAME, "Choose the folder with the reference photos.")
+            return
+        if not name or any(c in name for c in FORBIDDEN):
+            QMessageBox.warning(self, APP_NAME, f"Give the fingerprint a name without any of  {FORBIDDEN}")
+            return
+        files = sorted(str(p) for p in folder.iterdir() if p.suffix.lower() in IMAGE_EXTS and p.is_file())
+        if len(files) < 5:
+            QMessageBox.warning(self, APP_NAME, "At least 5 photos are needed; 20 or more give a reliable fingerprint.")
+            return
+        self.build_button.setEnabled(False)
+        self.progress.show()
+        self.message.setText(f"Reading {len(files)} photos ...")
+        self.cancelled = False
+
+        def work():
+            fp = prnu.build_fingerprint(files, self.signals.progress.emit, lambda: self.cancelled)
+            prnu.save_fingerprint(name, fp, str(folder))
+            return fp
+
+        QThreadPool.globalInstance().start(Job(name, work, (), {}, 0, self.signals))
+
+    def _done(self, name, fp, error, _generation):
+        self.build_button.setEnabled(True)
+        self.progress.hide()
+        if fp is None:
+            self.message.setText("Failed: " + (error.strip().splitlines()[-1] if error.strip() else "unknown error"))
+            return
+        skipped = f" {len(fp['skipped'])} skipped (other dimensions or unreadable)." if fp["skipped"] else ""
+        few = "  Fewer than 20 photos: expect weaker matches." if fp["count"] < 20 else ""
+        self.message.setText(f"'{name}' built from {fp['count']} photos.{skipped}{few}")
+        self.refresh()
+
+    def remove(self):
+        item = self.list.currentItem()
+        if item is None:
+            return
+        name = item.data(Qt.UserRole)
+        if QMessageBox.question(self, APP_NAME, f"Delete the fingerprint '{name}'?") == QMessageBox.Yes:
+            (prnu.store() / f"{name}.npz").unlink(missing_ok=True)
+            self.refresh()
+
+    def closeEvent(self, event):
+        self.cancelled = True
+        super().closeEvent(event)
+
+
 # ---------------------------------------------------------------------- guide
 
 class GuideDialog(QDialog):
@@ -428,15 +570,15 @@ class GuideDialog(QDialog):
     def __init__(self, tool, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"How to read: {tool.title}")
-        self.resize(760, 720)
+        self.resize(800, 820)
         lay = QVBoxLayout(self)
         text = QTextBrowser()
         text.setOpenExternalLinks(True)                        # sources open in the web browser
         text.document().setDefaultStyleSheet(
             f"h2 {{ font-size:15pt; }} h3 {{ font-size:11pt; color:{theme.MUTED}; margin-top:14px; }} "
             f"li {{ margin-bottom:6px; }} a {{ color:#7aa2ff; }}")
-        key = tool.id.split(" (")[0]
-        text.setHtml(guide.render(key, tool.title, [p.label for p in tool.params]))
+        text.setSearchPaths([str(guide.EXAMPLES)])             # the example pictures are referenced by file name
+        text.setHtml(guide.render(tool.id, tool.title, [p.label for p in tool.params]))
         lay.addWidget(text, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
@@ -504,8 +646,10 @@ class SettingsDialog(QDialog):
         lay.addWidget(buttons)
 
     def save(self):
+        self.cfg = {**online.load_config(), **self.cfg}       # keep what other windows stored meanwhile
         self.cfg["sightengine"] = {"api_user": self.user.text().strip(), "api_secret": self.secret.text().strip()}
         self.cfg["openai"] = {"api_key": self.openai_key.text().strip()}
         self.cfg["use_gpu"] = self.gpu.isChecked()
-        online.save_config(self.cfg)
+        if not online.save_config(self.cfg):
+            QMessageBox.warning(self, APP_NAME, f"Settings could not be saved: {online.config_path()} is not writable.")
         self.accept()

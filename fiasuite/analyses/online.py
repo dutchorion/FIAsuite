@@ -3,6 +3,7 @@ for it in the UI: the image is uploaded to a third party."""
 from __future__ import annotations
 
 import json
+import os
 
 import requests
 
@@ -15,13 +16,22 @@ def config_path():
 
 def load_config() -> dict:
     try:
-        return json.loads(config_path().read_text(encoding="utf-8"))
+        config = json.loads(config_path().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    return config if isinstance(config, dict) else {}
 
 
-def save_config(config: dict) -> None:
-    config_path().write_text(json.dumps(config, indent=2), encoding="utf-8")
+def save_config(config: dict) -> bool:
+    """Written to a temporary file and swapped in, so a crash cannot truncate the stored API keys.
+    False when the folder is read-only (write-protected stick): settings then last for the session only."""
+    temp = config_path().with_suffix(".json.tmp")
+    try:
+        temp.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        os.replace(temp, config_path())
+        return True
+    except OSError:
+        return False
 
 
 def sightengine(ev: Evidence) -> Result:

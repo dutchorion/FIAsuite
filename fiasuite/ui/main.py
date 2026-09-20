@@ -11,10 +11,10 @@ import cv2
 from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
-                               QFrame, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QProgressBar,
-                               QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QStackedWidget, QTableWidget,
-                               QTableWidgetItem, QTextBrowser, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-                               QWidget)
+                               QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox,
+                               QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter,
+                               QStackedWidget, QStyle, QStyleOptionSlider, QTableWidget, QTableWidgetItem, QTextBrowser,
+                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__, components
 from ..analyses import geometry, online
@@ -70,6 +70,24 @@ def result_color(res: Result | None) -> str:
     if res.score is not None and res.score >= 0.55 and SEVERITY_ORDER[worst] < 2:
         worst = "warn"
     return {"info": "#46a758", "note": "#f5d90a", "warn": "#f76b15", "alert": "#e5484d"}[worst]
+
+
+class ClickSlider(QSlider):
+    """Horizontal slider that jumps to the clicked point instead of paging towards it."""
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            opt = QStyleOptionSlider()
+            self.initStyleOption(opt)
+            style, point = self.style(), event.position().toPoint()
+            handle = style.subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+            if not handle.contains(point):
+                groove = style.subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self)
+                span = groove.width() - handle.width()
+                offset = point.x() - groove.x() - handle.width() // 2
+                self.setValue(QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), offset, span,
+                                                             opt.upsideDown))
+        super().mousePressEvent(event)      # the handle now sits under the cursor: dragging continues from there
 
 
 class Card(QFrame):
@@ -337,7 +355,7 @@ class MainWindow(QMainWindow):
         self.view_combo = QComboBox()
         self.view_combo.setMinimumWidth(240)
         self.view_combo.currentIndexChanged.connect(lambda: self._show_view(keep=True))
-        self.opacity = QSlider(Qt.Horizontal)
+        self.opacity = ClickSlider(Qt.Horizontal)
         self.opacity.setRange(0, 100)
         self.opacity.setValue(100)
         self.opacity.setFixedWidth(160)
@@ -411,6 +429,16 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setWordWrap(True)
+        self.table_search = QLineEdit()
+        self.table_search.setPlaceholderText("Search properties and values")
+        self.table_search.setClearButtonEnabled(True)
+        self.table_search.textChanged.connect(self._filter_table)
+        table_host = QWidget()
+        table_lay = QVBoxLayout(table_host)
+        table_lay.setContentsMargins(0, 0, 0, 0)
+        table_lay.setSpacing(6)
+        table_lay.addWidget(self.table_search)
+        table_lay.addWidget(self.table, 1)
         self.guide_button = QPushButton("How to read this ...")
         self.guide_button.setToolTip("What the output shows, how to interpret it, what the options do, and the "
                                      "sources of the technique")
@@ -426,7 +454,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.run_button)
         split = QSplitter(Qt.Vertical)
         split.addWidget(self.findings)
-        split.addWidget(self.table)
+        split.addWidget(table_host)
         split.setSizes([320, 380])
         lay.addWidget(split, 1)
         dock = QDockWidget("Analysis")
@@ -552,6 +580,7 @@ class MainWindow(QMainWindow):
         if item is None:
             return
         tool_id = item.data(0, Qt.UserRole)
+        self.table_search.clear()
         drawing = tool_id == "geometry" and self.ev is not None
         self.geometry_bar.setVisible(tool_id == "geometry")
         self.viewer.set_draw_mode(drawing)
@@ -661,7 +690,7 @@ class MainWindow(QMainWindow):
         host = QWidget()
         row = QHBoxLayout(host)
         row.setContentsMargins(0, 0, 0, 0)
-        slider = QSlider(Qt.Horizontal)
+        slider = ClickSlider(Qt.Horizontal)
         step = max(int(p.step), 1)
         slider.setRange(int(p.lo) // step, int(p.hi) // step)
         slider.setValue(int(values[p.key]) // step)
@@ -710,6 +739,14 @@ class MainWindow(QMainWindow):
             self.table.setItem(i, 1, QTableWidgetItem(str(v)))
         self.table.resizeColumnToContents(0)
         self.table.setColumnWidth(0, min(self.table.columnWidth(0), 210))
+        self._filter_table()
+
+    def _filter_table(self):
+        """Hide the rows that do not contain the search text, in either column."""
+        needle = self.table_search.text().strip().lower()
+        for i in range(self.table.rowCount()):
+            row = " ".join(self.table.item(i, c).text() for c in (0, 1) if self.table.item(i, c))
+            self.table.setRowHidden(i, needle not in row.lower())
 
     def _show_view(self, keep: bool = False):
         if self.ev is None or self.current is None:

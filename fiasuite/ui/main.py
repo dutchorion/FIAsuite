@@ -8,8 +8,8 @@ import webbrowser
 from pathlib import Path
 
 import cv2
-from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtCore import QPointF, QRectF, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDockWidget, QDoubleSpinBox,
                                QFileDialog, QFormLayout,
                                QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox,
@@ -62,6 +62,27 @@ def dot(color: str) -> QIcon:
     p.drawEllipse(2, 2, 10, 10)
     p.end()
     return QIcon(pix)
+
+
+def reset_icon(size: int = 16) -> QIcon:
+    """Anticlockwise arrow, painted rather than taken from the platform so it matches the dark theme everywhere.
+    The disabled version is drawn dim by hand: Qt's automatic greying is barely visible on a dark background."""
+    icon = QIcon()
+    for mode, color in ((QIcon.Normal, QColor(theme.TEXT)), (QIcon.Disabled, QColor("#4a4d55"))):
+        pix = QPixmap(size * 2, size * 2)
+        pix.setDevicePixelRatio(2)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(color, 1.6, Qt.SolidLine, Qt.RoundCap))
+        r, c = size / 2 - 3.5, size / 2
+        p.drawArc(QRectF(c - r, c - r, 2 * r, 2 * r), 90 * 16, 270 * 16)     # top, round the left, to the right
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        p.drawPolygon(QPolygonF([QPointF(c + r, c - 4), QPointF(c + r - 3.2, c + 0.5), QPointF(c + r + 3.2, c + 0.5)]))
+        p.end()
+        icon.addPixmap(pix, mode)
+    return icon
 
 
 def result_color(res: Result | None) -> str:
@@ -808,34 +829,67 @@ class MainWindow(QMainWindow):
             return
         values = self.params[tool.id]
 
+        resets: dict[str, QToolButton] = {}
+
+        def show_resets():                           # a reset button is live only while its option is changed
+            for p in tool.params:
+                resets[p.key].setEnabled(values[p.key] != p.default)
+            reset_all.setEnabled(any(b.isEnabled() for b in resets.values()))
+
         def changed(key, value):
             values[key] = value
+            show_resets()
             if self._dirty not in (None, tool):      # options of another tool are still waiting: run that one now
                 self._run_dirty()
             self._dirty = tool
             self.debounce.start()
 
+        setters = []
         for p in tool.params:
             if p.choices:
                 w = QComboBox()
                 w.addItems(p.choices() if callable(p.choices) else p.choices)
                 w.setCurrentText(str(values[p.key]))
                 w.currentTextChanged.connect(lambda v, k=p.key: changed(k, v))
+                setter = lambda w=w, d=p.default: w.setCurrentText(str(d))
             elif isinstance(p.default, bool):
                 w = QCheckBox()
                 w.setChecked(bool(values[p.key]))
                 w.toggled.connect(lambda v, k=p.key: changed(k, v))
+                setter = lambda w=w, d=p.default: w.setChecked(d)
             elif isinstance(p.default, float):
                 w = QDoubleSpinBox()
                 w.setRange(p.lo, p.hi)
                 w.setSingleStep(p.step)
                 w.setValue(float(values[p.key]))
                 w.valueChanged.connect(lambda v, k=p.key: changed(k, v))
+                setter = lambda w=w, d=p.default: w.setValue(d)
             else:
-                w = self._int_slider(p, values, changed)
-            self.form.addRow(p.label, w)
+                w, box = self._int_slider(p, values, changed)
+                setter = lambda box=box, d=p.default: box.setValue(int(d))
+            reset = QToolButton()
+            reset.setIcon(reset_icon())
+            reset.setToolTip(f"Reset to {p.default}")
+            reset.clicked.connect(lambda _=False, setter=setter: setter())    # clicked passes "checked"
+            resets[p.key] = reset
+            setters.append(setter)
+            host = QWidget()
+            row = QHBoxLayout(host)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(w, 1)
+            row.addWidget(reset)
+            self.form.addRow(p.label, host)
+        if tool.params:
+            reset_all = QPushButton(reset_icon(), "Reset all")
+            reset_all.setToolTip("Put every option of this tool back to its default")
+            reset_all.clicked.connect(lambda: [setter() for setter in setters])
+            row = QHBoxLayout()
+            row.addStretch(1)
+            row.addWidget(reset_all)
+            self.form.addRow(row)
+            show_resets()
 
-    def _int_slider(self, p, values, changed) -> QWidget:
+    def _int_slider(self, p, values, changed) -> tuple[QWidget, QSpinBox]:
         host = QWidget()
         row = QHBoxLayout(host)
         row.setContentsMargins(0, 0, 0, 0)
@@ -853,7 +907,7 @@ class MainWindow(QMainWindow):
                                             changed(p.key, max(int(p.lo), v // step * step))))
         row.addWidget(slider, 1)
         row.addWidget(box)
-        return host
+        return host, box
 
     # ------------------------------------------------------------------ showing results
     def _show_result(self):

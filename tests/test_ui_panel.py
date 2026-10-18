@@ -7,8 +7,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication, QSlider, QTableWidgetItem
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QPushButton, QSlider, QSpinBox,
+                               QTableWidgetItem, QToolButton)
 
+from fiasuite.tools import BY_ID, defaults
 from fiasuite.ui.main import ClickSlider, MainWindow
 
 
@@ -78,3 +80,36 @@ def test_click_on_the_handle_leaves_the_value_alone(qapp):
     slider.resize(200, 20)
     click(slider, slider.rect().center().x())
     assert slider.value() == 50
+
+
+def option_buttons(window):
+    resets = [b for b in window.form_host.findChildren(QToolButton) if b.toolTip().startswith("Reset to")]
+    reset_all = next(b for b in window.form_host.findChildren(QPushButton) if b.text() == "Reset all")
+    return resets, reset_all
+
+
+def test_reset_buttons_are_live_only_for_changed_options(window):
+    window.select_tool("ela")
+    resets, reset_all = option_buttons(window)
+    assert len(resets) == len(BY_ID["ela"].params)
+    assert not any(b.isEnabled() for b in resets) and not reset_all.isEnabled()
+    window.form_host.findChildren(QCheckBox)[0].setChecked(False)        # "Automatic error scale" defaults to on
+    assert [b.isEnabled() for b in resets] == [p.key == "auto_scale" for p in BY_ID["ela"].params]
+    assert reset_all.isEnabled()
+    next(b for b in resets if b.isEnabled()).click()
+    assert window.params["ela"]["auto_scale"] is True
+    assert not any(b.isEnabled() for b in resets) and not reset_all.isEnabled()
+
+
+def test_reset_all_restores_every_kind_of_option(window):
+    window.select_tool("clone_kp")                    # int sliders, a float box and a check box
+    window.form_host.findChildren(QSpinBox)[0].setValue(200)
+    window.form_host.findChildren(QDoubleSpinBox)[0].setValue(0.75)
+    window.form_host.findChildren(QCheckBox)[0].setChecked(True)
+    assert window.params["clone_kp"] != defaults(BY_ID["clone_kp"])
+    option_buttons(window)[1].click()
+    assert window.params["clone_kp"] == defaults(BY_ID["clone_kp"])
+    window.select_tool("ela")                         # a combo box
+    window.form_host.findChildren(QComboBox)[0].setCurrentIndex(1)
+    option_buttons(window)[1].click()
+    assert window.params["ela"] == defaults(BY_ID["ela"])

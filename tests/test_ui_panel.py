@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import numpy as np
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QMouseEvent
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
 
 from fiasuite.tools import BY_ID, defaults
 from fiasuite.ui.main import ClickSlider, MainWindow
+from fiasuite.ui.viewer import MAX_ZOOM, MIN_ZOOM, ZOOM_STEP, ImageView
 
 
 @pytest.fixture(scope="module")
@@ -113,3 +115,68 @@ def test_reset_all_restores_every_kind_of_option(window):
     window.form_host.findChildren(QComboBox)[0].setCurrentIndex(1)
     option_buttons(window)[1].click()
     assert window.params["ela"] == defaults(BY_ID["ela"])
+
+
+@pytest.fixture()
+def view(qapp):
+    v = ImageView()
+    v.resize(800, 600)
+    v.set_images(np.zeros((300, 400, 3), np.uint8))
+    v.actual_size()
+    return v
+
+
+def test_one_zoom_step_is_one_wheel_notch(view):
+    view.zoom_step(1)
+    assert view.zoom_factor() == pytest.approx(ZOOM_STEP)
+    view.zoom_step(-1)
+    assert view.zoom_factor() == pytest.approx(1)
+
+
+def test_zoom_stays_between_5_and_1000_percent(view):
+    for _ in range(40):
+        view.zoom_step(1)
+    assert view.zoom_factor() == pytest.approx(MAX_ZOOM)
+    for _ in range(80):
+        view.zoom_step(-1)
+    assert view.zoom_factor() == pytest.approx(MIN_ZOOM)
+
+
+def test_fitted_tiny_image_zooms_out_by_one_step_not_to_the_limit(qapp):
+    v = ImageView()
+    v.resize(800, 800)
+    v.set_images(np.zeros((8, 8, 3), np.uint8))                     # fitted far above 1000 %
+    fitted = v.zoom_factor()
+    v.zoom_step(1)
+    assert v.zoom_factor() == pytest.approx(fitted)                  # no further in
+    v.zoom_step(-1)
+    assert v.zoom_factor() == pytest.approx(fitted / ZOOM_STEP)      # one normal step out
+
+
+def test_zoom_buttons_step_like_the_wheel(window):
+    window.stack.setCurrentIndex(1)
+    window.viewer.set_images(np.zeros((300, 400, 3), np.uint8))
+    window.viewer.actual_size()
+    buttons = {b.text(): b for b in window.findChildren(QPushButton)}
+    buttons["+"].click()
+    assert window.viewer.zoom_factor() == pytest.approx(ZOOM_STEP)
+    buttons["−"].click()
+    buttons["−"].click()
+    assert window.viewer.zoom_factor() == pytest.approx(1 / ZOOM_STEP)
+
+
+def test_window_starts_at_most_of_the_screen(window):
+    screen = QApplication.primaryScreen().availableGeometry()
+    assert window.width() == int(screen.width() * 0.9) and window.height() == int(screen.height() * 0.9)
+
+
+def test_watermark_check_only_opens_the_synthid_page(window, monkeypatch):
+    from fiasuite.ui import main as main_module
+    opened = []
+    monkeypatch.setattr(main_module.webbrowser, "open", opened.append)
+    monkeypatch.setattr(main_module.QMessageBox, "information", lambda *a: pytest.fail("no pop-up expected"))
+    QApplication.clipboard().setText("left alone")
+    window.btn_marks.setEnabled(True)
+    window.btn_marks.click()
+    assert opened == ["https://synthid.com/"]
+    assert QApplication.clipboard().text() == "left alone"

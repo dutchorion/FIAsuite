@@ -82,6 +82,7 @@ def detect(ev: Evidence) -> Result:
         res.score = 0.05
         res.findings.append(Finding(INFO, "No known invisible watermark",
             "Means nothing by itself: most Stable Diffusion front-ends never embed this watermark, other generators "
-            "use different marks (Google SynthID and OpenAI are checked under 'Watermark check' in the toolbar), and "
+            "use different marks (SynthID, used by Google, OpenAI, NVIDIA and Kakao, is checked under 'Watermark check' "
+            "in the toolbar), and "
             "resizing or cropping destroys it."))
     return res

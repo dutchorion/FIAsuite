@@ -38,8 +38,11 @@ def image(tmp_path):
 
 
 @pytest.fixture()
-def window(qapp, app_dir):
+def window(qapp, app_dir, monkeypatch):
+    shown = []
+    monkeypatch.setattr(dialogs.ScanDialog, "exec", lambda self: shown.append(self) or QDialog.Rejected)
     w = MainWindow()
+    w.scan_dialogs_shown = shown                                       # opening an image asks what to scan
     yield w
     w.pool.clear()
     w.pool.waitForDone()
@@ -53,9 +56,11 @@ def choose(monkeypatch, ids, upload=False):
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes if upload else QMessageBox.No)
 
 
-def test_opening_an_image_runs_nothing(window, image):
+def test_opening_an_image_shows_the_scan_dialog_and_runs_nothing_yet(qapp, window, image):
     window.open_file(str(image))
-    assert not window.pending and not window.results
+    qapp.processEvents()
+    assert len(window.scan_dialogs_shown) == 1
+    assert not window.pending and not window.results                  # cancelled: nothing runs
     assert window.btn_scan.text() == "Scan ..."
 
 
@@ -141,7 +146,7 @@ def test_scan_shows_progress_and_outlines_finished_tests(qapp, window, image, mo
         assert result_color(window.results[tool_id]) in frame.styleSheet()
         assert bar.value() == bar.maximum() == 1
     assert dialog.summary.text() == "2 of 2 analyses finished"
-    assert not window.progress.isTextVisible()                        # the text only shows while something runs
+    assert window.progress.text() == "scans complete"
     assert window.progress.value() == window.progress.maximum() == 2
 
 

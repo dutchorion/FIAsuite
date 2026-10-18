@@ -381,11 +381,13 @@ GUIDE: dict[str, dict] = {
         "pitfalls": ["'not detected' does NOT show authenticity: the check recognises OpenAI content only, older OpenAI "
                      "images carry no watermark, and metadata is lost on re-saving.",
                      "Strict rate limits; uploads are not covered by OpenAI's zero-data-retention option.",
-                     "Google's SynthID for Gemini/Imagen images has no public API: use the Watermark check menu."],
+                     "SynthID marks from Google, NVIDIA and Kakao tools are not covered here: use 'Watermark check' "
+                     "in the toolbar (Google's SynthID Detector)."],
         "sources": [("OpenAI API: Content provenance guide", "https://developers.openai.com/api/docs/guides/content-provenance"),
                     ("OpenAI Help: provenance signals in OpenAI-generated content",
                      "https://help.openai.com/en/articles/8912793-c2pa-and-synthid-in-openai-generated-images"),
-                    ("Google DeepMind: SynthID", "https://deepmind.google/models/synthid/")],
+                    ("Google DeepMind: SynthID", "https://deepmind.google/models/synthid/"),
+                    ("Google: SynthID Detector", "https://synthid.com/")],
     },
 }
 

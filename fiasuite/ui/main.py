@@ -29,21 +29,8 @@ from .worker import Job, Signals
 REVERSE_SEARCH = {"Google Lens": "https://lens.google.com/", "TinEye": "https://tineye.com/",
                   "Bing Visual Search": "https://www.bing.com/visualsearch", "Yandex Images": "https://yandex.com/images/"}
 
-# sites without a usable API: the image goes on the clipboard and the page opens; the user pastes it there
-PROVENANCE_SITES = {
-    "Google Gemini (checks for Google's SynthID watermark)": (
-        "https://gemini.google.com/app",
-        "paste the image with Ctrl+V and ask:  Was this image created or edited with Google AI?\n\n"
-        "Gemini looks for Google's invisible SynthID watermark. It recognises content from Google's own tools only."),
-    "Google SynthID Detector (portal, access by waitlist)": (
-        "https://deepmind.google/models/synthid/",
-        "open the SynthID Detector from this page (journalists and researchers can join the waitlist) and paste or "
-        "upload the image there."),
-    "OpenAI verify page (no API key needed)": (
-        "https://openai.com/research/verify/",
-        "paste or upload the image. The page checks for OpenAI's Content Credentials and SynthID watermark, the same "
-        "check as the 'OpenAI provenance check' tool."),
-}
+# Google's SynthID Detector: watermarks of Google, OpenAI, NVIDIA and Kakao tools. A web page with no API.
+SYNTHID_URL = "https://synthid.com/"
 
 ONLINE_TOOLS = [Tool(f"online:{name}", f"{name} (online)", "Online services", fn,
                      f"{about} Nothing is sent until you press the button; the API key is set under Settings.",
@@ -355,7 +342,6 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1560, 960)
         self.setAcceptDrops(True)
         self.ev: Evidence | None = None
         self.generation = 0
@@ -385,7 +371,6 @@ class MainWindow(QMainWindow):
         self.progress = ClickProgressBar()
         self.progress.setObjectName("status")
         self.progress.setFixedWidth(180)
-        self.progress.setFormat("in progress")
         self.progress.setCursor(Qt.PointingHandCursor)
         self.progress.setToolTip("Show the progress of every analysis")
         self.progress.clicked.connect(self.show_progress)
@@ -394,8 +379,12 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.pixel_label)
         self.statusBar().addPermanentWidget(self.progress)
         self._set_enabled(False)
-        widths = online.load_config().get("sidebars", [290, 440])      # remembered from the last session
-        QTimer.singleShot(0, lambda: self.resizeDocks([self.tree_dock, self.details_dock], list(widths), Qt.Horizontal))
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
+        self.move(screen.center() - self.rect().center())
+        # both sidebars as wide as the longest tool name needs, plus room for the scroll bar
+        side = self.tree.sizeHintForColumn(0) + 2 * self.tree.frameWidth() + self.tree.verticalScrollBar().sizeHint().width() + 16
+        QTimer.singleShot(0, lambda: self.resizeDocks([self.tree_dock, self.details_dock], [side, side], Qt.Horizontal))
 
     # ------------------------------------------------------------------ construction
     def _build_toolbar(self):
@@ -433,11 +422,9 @@ class MainWindow(QMainWindow):
             menu.addAction(name, lambda url=url, name=name: self.reverse_search(name, url))
         self.btn_reverse = button("Reverse image search", menu=menu,
                                   tip="Copies the image to the clipboard and opens the search page: press Ctrl+V there")
-        marks = QMenu(self)
-        for name, (url, how) in PROVENANCE_SITES.items():
-            marks.addAction(name, lambda url=url, name=name, how=how: self.open_site_with_image(name, url, how))
-        self.btn_marks = button("Watermark check", menu=marks,
-                                tip="Google SynthID and OpenAI provenance checks that only exist as web pages")
+        self.btn_marks = button("Watermark check", lambda: webbrowser.open(SYNTHID_URL),
+                                tip="Opens Google's SynthID Detector in the browser: invisible watermarks of Google, "
+                                    "OpenAI, NVIDIA and Kakao tools. Sign in there and upload the file yourself.")
         button("Settings ...", self.open_settings)
         button("Setup ...", self.open_setup, tip="Install ExifTool and the neural models")
         self.addAction(QAction(self, shortcut=QKeySequence.Open, triggered=self.open_dialog))
@@ -498,10 +485,18 @@ class MainWindow(QMainWindow):
         fit.clicked.connect(lambda: self.viewer.fit())
         full = QPushButton("1:1")
         full.clicked.connect(lambda: self.viewer.actual_size())
+        zoom_out = QPushButton("\u2212")             # minus sign
+        zoom_out.setToolTip("Zoom out (one mouse-wheel step)")
+        zoom_out.clicked.connect(lambda: self.viewer.zoom_step(-1, at_cursor=False))
+        zoom_in = QPushButton("+")
+        zoom_in.setToolTip("Zoom in (one mouse-wheel step)")
+        zoom_in.clicked.connect(lambda: self.viewer.zoom_step(1, at_cursor=False))
         self.overlay_label = QLabel("Overlay")
         for w in (QLabel("View"), self.view_combo, self.overlay_label, self.opacity, self.hold, self.side):
             bar.addWidget(w)
         bar.addStretch(1)
+        bar.addWidget(zoom_out)
+        bar.addWidget(zoom_in)
         bar.addWidget(fit)
         bar.addWidget(full)
         bar_host = QWidget()
@@ -599,9 +594,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.pool.clear()                            # queued analyses must not keep the process alive
         self.generation += 1
-        cfg = online.load_config()
-        cfg["sidebars"] = [self.tree_dock.width(), self.details_dock.width()]
-        online.save_config(cfg)
         super().closeEvent(event)
 
     # ------------------------------------------------------------------ loading
@@ -647,6 +639,7 @@ class MainWindow(QMainWindow):
         stored = online.recall_sightengine(ev)
         if stored is not None:
             self._on_done(self._job_key("online:Sightengine"), stored, "", self.generation)
+        QTimer.singleShot(0, self.scan)              # after the drop / file dialog has fully returned
 
     def scan(self):
         """Ask which analyses to run, then run them."""
@@ -737,7 +730,7 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(bool(self.run_log))  # stays after the round finishes, to reopen the overview
         self.progress.setRange(0, max(len(self.run_log), 1))
         self.progress.setValue(done)
-        self.progress.setTextVisible(n > 0)          # "in progress" over the bar while anything runs
+        self.progress.setFormat("in progress" if n else "scans complete")
         if self.progress_dialog is not None and self.progress_dialog.isVisible():
             self.progress_dialog.refresh()
         self.statusBar().showMessage(f"Running {n} analysis job(s) ..." if n else "Ready", 0 if n else 4000)

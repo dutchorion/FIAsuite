@@ -32,7 +32,7 @@ Dots in the tool list: green = nothing found, yellow = note, orange = suspicious
 | Calibrate | Measure a detector on **your own** authentic and manipulated images (AUC, detection rate at 1 % and 5 % false alarms), also after "laundering" such as `resize0.5+jpeg75` |
 | Export report | HTML or PDF case report (hashes, parameters, findings, maps) and a JSON record for machines. Tick which analyses to include (check all / none). The PDF is laid out on A4: every analysis starts on a new page, a page that continues a section is headed "<section> (continued)", every image is fitted to the column and none is split across pages, each page carries the file name, hash and page number |
 | Reverse image search | Copies the image to the clipboard and opens Google Lens / TinEye / Bing / Yandex: press Ctrl+V there |
-| Watermark check | Same clipboard hand-over for provenance checks that only exist as web pages: Google Gemini and the SynthID Detector portal (Google's SynthID watermark), OpenAI's verify page |
+| Watermark check | Opens Google's SynthID Detector (synthid.com) in the browser. Detects the invisible SynthID watermark of Google, OpenAI, NVIDIA and Kakao tools; sign in there with a Google, OpenAI or Apple account and upload the file yourself |
 | Settings | API key for the optional online detector |
 
 ## The tools
@@ -64,7 +64,7 @@ for the invisible watermark of Stable Diffusion's reference software (SD 1.x, 2.
 magnifier enhancement, histogram with contrast-adjustment traces, hidden pixels under transparency, luminance
 gradient, principal components, level sweep, bit planes, colour channels (the Forensically tool set).
 
-**Online (optional)** - Sightengine AI detection with per-generator scores; OpenAI provenance check (OpenAI's Content Credentials and its invisible SynthID watermark, which survives screenshots and recompression, for content made with OpenAI tools only). Both need your own API key under Settings and upload only on your click. Google offers no public API for its SynthID image watermark, hence the *Watermark check* menu.
+**Online (optional)** - Sightengine AI detection with per-generator scores; OpenAI provenance check (OpenAI's Content Credentials and its invisible SynthID watermark, which survives screenshots and recompression, for content made with OpenAI tools only). Both need your own API key under Settings and upload only on your click. Google offers no public API for its SynthID Detector, hence the *Watermark check* button.
 
 ## Reading the results honestly
 

@@ -19,6 +19,10 @@ def to_pixmap(bgr: np.ndarray) -> QPixmap:
     return QPixmap.fromImage(QImage(bgr.data, w, h, w * 3, QImage.Format_BGR888))
 
 
+ZOOM_STEP = 1.25                                   # one mouse-wheel notch, and one press of the zoom buttons
+MIN_ZOOM, MAX_ZOOM = 0.05, 10.0                    # 5 % .. 1000 %
+
+
 class ImageView(QGraphicsView):
     """Base image with an optional pixel-aligned overlay. Wheel zooms around the
     cursor, drag pans, double-click fits."""
@@ -159,14 +163,24 @@ class ImageView(QGraphicsView):
         other._fitted = self._fitted               # a fitted pair must keep re-fitting when the window resizes
         other._syncing = False
 
+    def zoom_step(self, steps: int, at_cursor: bool = True) -> None:
+        """Zoom in (steps > 0) or out by whole wheel notches, within 5 % .. 1000 %. A fitted view that is already
+        outside that range (a huge or a tiny image) is never pushed further out, only back towards it."""
+        current = self.zoom_factor()
+        lo, hi = min(MIN_ZOOM, current), max(MAX_ZOOM, current)
+        target = min(max(current * ZOOM_STEP ** steps, lo), hi)
+        if target == current:
+            return
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse if at_cursor else QGraphicsView.AnchorViewCenter)
+        self.scale(target / current, target / current)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self._fitted = False
+        self.view_changed.emit()
+
     def wheelEvent(self, event):
         if event.angleDelta().y() == 0:              # horizontal wheel / touchpad swipe
             return
-        factor = 1.25 if event.angleDelta().y() > 0 else 0.8
-        if 0.02 < self.zoom_factor() * factor < 64:
-            self.scale(factor, factor)
-            self._fitted = False
-            self.view_changed.emit()
+        self.zoom_step(1 if event.angleDelta().y() > 0 else -1)
 
     def mouseDoubleClickEvent(self, event):
         if not self._draw:

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .analyses import (ai, clone, compression, geometry, interpolation, jpegstruct, metadata, noise, prnu, spectral, trustmark,
-                       visual, watermark)
+from .analyses import (ai, clone, compression, computational, geometry, interpolation, jpegstruct, metadata, noise, prnu,
+                       spectral, trustmark, visual, watermark)
 
 
 @dataclass
@@ -44,6 +44,10 @@ TOOLS: list[Tool] = [
     Tool("c2pa", "Content Credentials (C2PA)", "File & provenance", metadata.run_c2pa,
          "Reads and cryptographically validates the C2PA manifest: who signed the file, with which tool, and whether "
          "generative AI was declared.", auto=True, axis="provenance"),
+    Tool("computational", "Computational photography (smartphones)", "File & provenance", computational.detect,
+         "Smartphones merge bursts of frames (HDR, night modes), crop and enlarge (digital and AI zoom) and blur "
+         "backgrounds from depth maps by default. Flags phones that do so and every trace of it in the file: such "
+         "pixels were computed, not recorded in one exposure.", auto=True, axis="provenance"),
     Tool("trustmark", "Content Credentials watermark (TrustMark)", "File & provenance", trustmark.detect,
          "Decodes Adobe TrustMark, the open invisible watermark the C2PA lists for durable Content Credentials: an "
          "identifier in the pixels by which a file's credentials can be looked up after its metadata was stripped.",

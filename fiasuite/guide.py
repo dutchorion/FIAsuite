@@ -53,6 +53,49 @@ GUIDE: dict[str, dict] = {
                     ("Content Credentials Verify (the reference web checker)", "https://contentcredentials.org/verify"),
                     ("c2pa-python, the library used here", "https://opensource.contentauthenticity.org/docs/c2pa-python/")],
     },
+    "computational": {
+        "what": "A smartphone photo is rarely one exposure. By default phones merge a burst of frames (Smart HDR, "
+                "HDR+, multi-frame processing), stack frames in low light (Night mode, Night Sight), crop and enlarge "
+                "when zooming (digital zoom, multi-frame super-resolution, and on some models generative AI zoom), "
+                "blur the background from a depth map (portrait mode, bokeh) and apply AI scene enhancement. This "
+                "check names the default processing of the phone that took the picture and lists every trace of it "
+                "recorded in the file.",
+        "read": ["'Smartphone with computational photography by default': the camera model is a phone that merges "
+                 "frames for every photo. The table lists what that model does by default.",
+                 "'Computational capture recorded in the file': concrete traces, each with the tag it comes from - "
+                 "EXIF CompositeImage (with the number of source frames), iOS HDR and Portrait renderings, Apple's and "
+                 "Google's HDR records, embedded depth maps, gain maps, digital zoom, the IPTC 'computational "
+                 "capture' declaration and Samsung's capture records.",
+                 "Both are orange: a reason to review, not a finding of manipulation. The pixels were computed by the "
+                 "camera, so treat fine detail, texture and noise with care, and prefer the original file.",
+                 "Merged, sharpened, depth-blurred or enlarged pixels can make the noise, CFA, resampling and ELA "
+                 "tools and the AI detectors respond. Read their results with this in mind."],
+        "pitfalls": ["Almost every smartphone sold since 2018 merges frames by default, so almost every phone photo "
+                     "is flagged. The flag says how the picture was made, not that it is false.",
+                     "Without camera metadata (stripped by most platforms) nothing can be said either way.",
+                     "Generative zoom (Pixel 10 Pro Pro Res Zoom beyond 30x) and Samsung's AI moon enhancement add "
+                     "detail the sensor did not record. The C2PA tool shows Google's signed 'edited with AI' label "
+                     "where it survives.",
+                     "Brand-level defaults for makers other than Apple, Google and Samsung are general industry "
+                     "practice, not checked model by model."],
+        "sources": [("IPTC Digital Source Type: multi-frame computational capture",
+                     "https://cv.iptc.org/newscodes/digitalsourcetype/computationalCapture"),
+                    ("Google Research: every HDR+ photo is a composite of a burst",
+                     "https://research.google/blog/introducing-the-hdr-burst-photography-dataset/"),
+                    ("Samsung: how Galaxy cameras combine super-resolution and AI for the moon",
+                     "https://www.samsungmobilepress.com/feature-stories/how-samsung-galaxy-cameras-combine-super-"
+                     "resolution-technologies-with-ai-technology-to-produce-high-quality-images-of-the-moon"),
+                    ("PhoneArena: Pixel 10 Pro Res Zoom - when is a photo not a photo anymore?",
+                     "https://www.phonearena.com/news/pixel-10-pro-res-zoom-when-is-a-photo-not-a-photo-anymore_id173458"),
+                    ("Gigazine: Google Pixel 10 attaches C2PA Content Credentials",
+                     "https://gigazine.net/gsc_news/en/20250830-google-pixel-10-c2pa"),
+                    ("Macworld: Deep Fusion and Smart HDR on the iPhone 11",
+                     "https://www.macworld.com/article/233656/how-to-enable-or-disable-deep-fusion-and-smart-hdr-on-the-iphone-11.html"),
+                    ("ExifTool tag names (EXIF CompositeImage, CustomRendered; Apple, Google, Samsung)",
+                     "https://exiftool.org/TagNames/"),
+                    ("ExifTool sample images, used to check the tags on real phone files",
+                     "https://exiftool.org/sample_images.html")],
+    },
     "trustmark": {
         "what": "Decodes Adobe TrustMark, an open invisible watermark (MIT licence) that the C2PA lists as a 'soft "
                 "binding': an identifier hidden in the pixels. Unlike a C2PA manifest it survives metadata stripping, "

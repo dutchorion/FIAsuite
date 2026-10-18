@@ -207,6 +207,13 @@ CASES: dict[str, list[tuple[str, str, str | None]]] = {
          "generative fill) and ingredients: the recorded editing history.", None),
         ("Validation failure", "The manifest is present but the hash no longer matches: the file was changed after signing.", None),
         ("No manifest", "By far the most common case. It says nothing: almost every platform strips the manifest.", None)],
+    "computational": [
+        ("Recent iPhone", "'Smart HDR merges a burst of frames', and in the file EXIF CompositeImage 'Composite Image "
+         "Captured While Shooting' with the number of source frames, an HDR gain map and the Photographic Style.", None),
+        ("Pixel", "HDR+ on every photo; the file carries the HDR+ maker note, and on a Pixel 10 the 'computational "
+         "capture' declaration. Portrait shots add a depth map.", None),
+        ("Camera or scanner", "No smartphone, no multi-frame record: green.", None),
+        ("Metadata stripped", "Downloaded from a platform that removed the metadata: the device cannot be told.", None)],
     "trustmark": [
         ("Watermarked, metadata intact", "A TrustMark identifier and a valid C2PA manifest: the file is as its "
          "issuer published it, and the identifier can recover the credentials if the metadata is lost later.", None),

@@ -39,7 +39,9 @@ Dots in the tool list: green = nothing found, yellow = note, orange = suspicious
 
 **File & provenance** - ExifTool metadata with consistency rules (AI-generator tags, editing software, XMP
 history, Photoshop document ancestors, date conflicts, missing MakerNotes), C2PA Content Credentials with
-signature validation, Adobe TrustMark watermark (the C2PA soft binding behind durable Content Credentials),
+signature validation, computational photography (smartphones that merge frames, zoom digitally or blur
+backgrounds by default, and the traces of it in the file), Adobe TrustMark watermark (the C2PA soft binding
+behind durable Content Credentials),
 JPEG structure (quantization tables, quality, trailing data), embedded-thumbnail comparison, hashes, string
 extraction.
 

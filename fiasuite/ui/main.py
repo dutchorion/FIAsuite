@@ -8,13 +8,16 @@ import webbrowser
 from pathlib import Path
 
 import cv2
-from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
+from PySide6.QtCore import QPointF, QRectF, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import (QAction, QColor, QIcon, QKeySequence, QPainter, QPalette, QPen, QPixmap, QPolygonF, QTextLayout,
+                           QTextOption)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDockWidget, QDoubleSpinBox,
+                               QFileDialog, QFormLayout,
                                QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox,
                                QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter,
-                               QStackedWidget, QStyle, QStyleOptionSlider, QTableWidget, QTableWidgetItem, QTextBrowser,
-                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionSlider, QStyleOptionViewItem,
+                               QTableWidget, QTableWidgetItem, QTextBrowser, QToolButton, QTreeWidget, QTreeWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__, components
 from ..analyses import geometry, online
@@ -28,21 +31,8 @@ from .worker import Job, Signals
 REVERSE_SEARCH = {"Google Lens": "https://lens.google.com/", "TinEye": "https://tineye.com/",
                   "Bing Visual Search": "https://www.bing.com/visualsearch", "Yandex Images": "https://yandex.com/images/"}
 
-# sites without a usable API: the image goes on the clipboard and the page opens; the user pastes it there
-PROVENANCE_SITES = {
-    "Google Gemini (checks for Google's SynthID watermark)": (
-        "https://gemini.google.com/app",
-        "paste the image with Ctrl+V and ask:  Was this image created or edited with Google AI?\n\n"
-        "Gemini looks for Google's invisible SynthID watermark. It recognises content from Google's own tools only."),
-    "Google SynthID Detector (portal, access by waitlist)": (
-        "https://deepmind.google/models/synthid/",
-        "open the SynthID Detector from this page (journalists and researchers can join the waitlist) and paste or "
-        "upload the image there."),
-    "OpenAI verify page (no API key needed)": (
-        "https://openai.com/research/verify/",
-        "paste or upload the image. The page checks for OpenAI's Content Credentials and SynthID watermark, the same "
-        "check as the 'OpenAI provenance check' tool."),
-}
+# Google's SynthID Detector: watermarks of Google, OpenAI, NVIDIA and Kakao tools. A web page with no API.
+SYNTHID_URL = "https://synthid.com/"
 
 ONLINE_TOOLS = [Tool(f"online:{name}", f"{name} (online)", "Online services", fn,
                      f"{about} Nothing is sent until you press the button; the API key is set under Settings.",
@@ -61,6 +51,27 @@ def dot(color: str) -> QIcon:
     p.drawEllipse(2, 2, 10, 10)
     p.end()
     return QIcon(pix)
+
+
+def reset_icon(size: int = 16) -> QIcon:
+    """Anticlockwise arrow, painted rather than taken from the platform so it matches the dark theme everywhere.
+    The disabled version is drawn dim by hand: Qt's automatic greying is barely visible on a dark background."""
+    icon = QIcon()
+    for mode, color in ((QIcon.Normal, QColor(theme.TEXT)), (QIcon.Disabled, QColor("#4a4d55"))):
+        pix = QPixmap(size * 2, size * 2)
+        pix.setDevicePixelRatio(2)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(color, 1.6, Qt.SolidLine, Qt.RoundCap))
+        r, c = size / 2 - 3.5, size / 2
+        p.drawArc(QRectF(c - r, c - r, 2 * r, 2 * r), 90 * 16, 270 * 16)     # top, round the left, to the right
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        p.drawPolygon(QPolygonF([QPointF(c + r, c - 4), QPointF(c + r - 3.2, c + 0.5), QPointF(c + r + 3.2, c + 0.5)]))
+        p.end()
+        icon.addPixmap(pix, mode)
+    return icon
 
 
 def result_color(res: Result | None) -> str:
@@ -90,6 +101,140 @@ class ClickSlider(QSlider):
         super().mousePressEvent(event)      # the handle now sits under the cursor: dragging continues from there
 
 
+class WrapDelegate(QStyledItemDelegate):
+    """Table cells that wrap at word boundaries, and inside long words (tag names, hashes) only where they must,
+    so no text is cut off. Row heights follow from sizeHint; the table recomputes them when a column changes width."""
+    PAD = 4
+
+    @staticmethod
+    def _option() -> QTextOption:
+        option = QTextOption()
+        option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        return option
+
+    def _height(self, text: str, font, width: float) -> float:
+        layout = QTextLayout(text, font)
+        layout.setTextOption(self._option())
+        layout.beginLayout()
+        height = 0.0
+        while (line := layout.createLine()).isValid():
+            line.setLineWidth(max(width, 1.0))
+            height += line.height()
+        layout.endLayout()
+        return height
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        style = opt.widget.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)    # background and selection
+        rect = QRectF(style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)).adjusted(
+            self.PAD, self.PAD / 2, -self.PAD, 0)
+        painter.save()
+        painter.setFont(opt.font)
+        selected = opt.state & QStyle.State_Selected
+        painter.setPen(opt.palette.color(QPalette.HighlightedText if selected else QPalette.Text))
+        painter.drawText(rect, text, self._option())
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        width = self.parent().columnWidth(index.column()) - 2 * self.PAD - 6
+        text = str(index.data() or "")
+        hint.setHeight(max(hint.height(), int(self._height(text, option.font, width) + self.PAD + 4)))
+        return hint
+
+
+class ClickProgressBar(QProgressBar):
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+
+
+class ProgressDialog(QDialog):
+    """Progress of every analysis since the last scan started. A finished analysis is outlined in the colour of
+    its result, a failed one in grey."""
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(main)
+        self.main = main
+        self.setWindowTitle("Scan progress")
+        self.setModal(True)
+        self.resize(440, 600)
+        lay = QVBoxLayout(self)
+        self.summary = QLabel("")
+        self.summary.setObjectName("h2")
+        self.overall = QProgressBar()
+        self.overall.setTextVisible(False)
+        body = QWidget()
+        self.rows = QVBoxLayout(body)
+        self.rows.setContentsMargins(0, 0, 4, 0)
+        self.rows.setSpacing(6)
+        self.rows.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(body)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(self.summary)
+        lay.addWidget(self.overall)
+        lay.addWidget(scroll, 1)
+        lay.addWidget(buttons)
+        self.widgets: dict[str, tuple[QFrame, QLabel, QProgressBar]] = {}
+        self.refresh()
+
+    def _row(self, tool_id: str):
+        frame = QFrame()
+        frame.setObjectName("run")
+        row = QVBoxLayout(frame)
+        row.setContentsMargins(10, 8, 10, 8)
+        title = QLabel(next(t.title for t in ALL_TOOLS if t.id == tool_id))
+        status = QLabel("")
+        status.setObjectName("muted")
+        bar = QProgressBar()
+        bar.setTextVisible(False)
+        row.addWidget(title)
+        row.addWidget(status)
+        row.addWidget(bar)
+        self.rows.insertWidget(self.rows.count() - 1, frame)        # above the stretch
+        self.widgets[tool_id] = frame, status, bar
+
+    def refresh(self):
+        log = self.main.run_log
+        if list(self.widgets) != list(log):                          # a new round of analyses: rebuild the list
+            for frame, _, _ in self.widgets.values():
+                frame.deleteLater()
+            self.widgets.clear()
+            for tool_id in log:
+                self._row(tool_id)
+        for tool_id, state in log.items():
+            frame, status, bar = self.widgets[tool_id]
+            if state == "done":
+                res = self.main.results.get(tool_id)
+                top = max(res.findings, key=lambda f: SEVERITY_ORDER[f.severity], default=None) if res else None
+                score = "" if res is None or res.score is None else f"  ·  {res.score:.2f}"
+                status.setText((top.title if top else "done") + score)
+                border = result_color(res)
+            elif state == "failed":
+                error = self.main.errors.get(tool_id, "").strip().splitlines()
+                status.setText("failed: " + error[-1][:90] if error else "failed")
+                border = "#8b8d98"
+            else:
+                status.setText(state)
+                border = theme.BORDER
+            bar.setRange(0, 0 if state == "running" else 1)          # 0..0: busy animation while it runs
+            bar.setValue(1 if state in ("done", "failed") else 0)
+            frame.setStyleSheet(f"QFrame#run {{ background: {theme.PANEL}; border: 2px solid {border}; "
+                                "border-radius: 8px; }")
+        done = sum(state in ("done", "failed") for state in log.values())
+        self.overall.setRange(0, max(len(log), 1))
+        self.overall.setValue(done)
+        self.summary.setText(f"{done} of {len(log)} analyses finished" if log else "No analyses have run yet.")
+
+
 class Card(QFrame):
     clicked = Signal(str)
     SIDE = 250
@@ -117,6 +262,10 @@ class Card(QFrame):
         lay.addWidget(self.thumb)
         lay.addWidget(self.title)
         lay.addWidget(self.status, 1)
+
+    def set_idle(self):
+        self.thumb.setText("not run")
+        self.status.setText("not run - choose it under Scan")
 
     def set_running(self):
         self.thumb.setText("analysing ...")
@@ -216,9 +365,14 @@ class Dashboard(QScrollArea):
     def set_evidence(self, ev: Evidence):
         self.title.setText(ev.path.name)
         self.subtitle.setText(f"{ev.width} x {ev.height} px  ·  {len(ev.data):,} bytes  ·  SHA-256 {ev.hashes['sha256']}")
+        self.headline.setText("No analyses have run yet. Press Scan to choose them.")
+        for level, reasons in self.axis_cards.values():
+            level.setText("-")
+            level.setStyleSheet("font-size:15pt; font-weight:600;")
+            reasons.setText("")
         for card in self.cards.values():
             card.thumb.clear()
-            card.set_running()
+            card.set_idle()
 
     def set_verdicts(self, verdicts, pending: int):
         self.headline.setText(headline(verdicts) if pending == 0 else f"Analysing ... {pending} tools still running.")
@@ -235,7 +389,6 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1560, 960)
         self.setAcceptDrops(True)
         self.ev: Evidence | None = None
         self.generation = 0
@@ -248,7 +401,11 @@ class MainWindow(QMainWindow):
         self.pool.setMaxThreadCount(3)
         self.signals = Signals()
         self.signals.done.connect(self._on_done)
+        self.signals.started.connect(self._on_started)
+        self.run_log: dict[str, str] = {}                        # tool id -> waiting | running | done | failed
+        self.progress_dialog: ProgressDialog | None = None
         self.result_params: dict[str, dict] = {}                 # options each stored result was computed with
+        self.scan_selection = {t.id for t in TOOLS if t.auto}    # last choice in the scan dialog
         self.lines: dict[str, list] = {name: [] for name in geometry.SETS}   # examiner-drawn lines per set
         self._dirty: Tool | None = None                          # tool whose options changed, awaiting the debounce
         self.debounce = QTimer(self, singleShot=True, interval=350)
@@ -258,16 +415,23 @@ class MainWindow(QMainWindow):
         self._build_tree()
         self._build_center()
         self._build_details()
-        self.progress = QProgressBar()
+        self.progress = ClickProgressBar()
+        self.progress.setObjectName("status")
         self.progress.setFixedWidth(180)
-        self.progress.setTextVisible(False)
+        self.progress.setCursor(Qt.PointingHandCursor)
+        self.progress.setToolTip("Show the progress of every analysis")
+        self.progress.clicked.connect(self.show_progress)
         self.progress.hide()
         self.pixel_label = QLabel("")
         self.statusBar().addPermanentWidget(self.pixel_label)
         self.statusBar().addPermanentWidget(self.progress)
         self._set_enabled(False)
-        widths = online.load_config().get("sidebars", [290, 440])      # remembered from the last session
-        QTimer.singleShot(0, lambda: self.resizeDocks([self.tree_dock, self.details_dock], list(widths), Qt.Horizontal))
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(int(screen.width() * 0.9), int(screen.height() * 0.9))
+        self.move(screen.center() - self.rect().center())
+        # both sidebars as wide as the longest tool name needs, plus room for the scroll bar
+        side = self.tree.sizeHintForColumn(0) + 2 * self.tree.frameWidth() + self.tree.verticalScrollBar().sizeHint().width() + 16
+        QTimer.singleShot(0, lambda: self.resizeDocks([self.tree_dock, self.details_dock], [side, side], Qt.Horizontal))
 
     # ------------------------------------------------------------------ construction
     def _build_toolbar(self):
@@ -290,7 +454,7 @@ class MainWindow(QMainWindow):
             return b
 
         button("Open image", self.open_dialog, primary=True, tip="Ctrl+O, or drop a file on the window")
-        self.btn_scan = button("Re-run full scan", self.scan, tip="Run every automatic analysis again")
+        self.btn_scan = button("Scan ...", self.scan, primary=True, tip="Choose the analyses to run on this image")
         bar.addSeparator()
         self.btn_compare = button("Compare ...", self.open_compare, tip="Compare with a second version of the picture")
         button("Batch triage ...", self.open_batch, tip="Screen a whole folder")
@@ -305,11 +469,9 @@ class MainWindow(QMainWindow):
             menu.addAction(name, lambda url=url, name=name: self.reverse_search(name, url))
         self.btn_reverse = button("Reverse image search", menu=menu,
                                   tip="Copies the image to the clipboard and opens the search page: press Ctrl+V there")
-        marks = QMenu(self)
-        for name, (url, how) in PROVENANCE_SITES.items():
-            marks.addAction(name, lambda url=url, name=name, how=how: self.open_site_with_image(name, url, how))
-        self.btn_marks = button("Watermark check", menu=marks,
-                                tip="Google SynthID and OpenAI provenance checks that only exist as web pages")
+        self.btn_marks = button("Watermark check", lambda: webbrowser.open(SYNTHID_URL),
+                                tip="Opens Google's SynthID Detector in the browser: invisible watermarks of Google, "
+                                    "OpenAI, NVIDIA and Kakao tools. Sign in there and upload the file yourself.")
         button("Settings ...", self.open_settings)
         button("Setup ...", self.open_setup, tip="Install ExifTool and the neural models")
         self.addAction(QAction(self, shortcut=QKeySequence.Open, triggered=self.open_dialog))
@@ -370,10 +532,18 @@ class MainWindow(QMainWindow):
         fit.clicked.connect(lambda: self.viewer.fit())
         full = QPushButton("1:1")
         full.clicked.connect(lambda: self.viewer.actual_size())
+        zoom_out = QPushButton("\u2212")             # minus sign
+        zoom_out.setToolTip("Zoom out (one mouse-wheel step)")
+        zoom_out.clicked.connect(lambda: self.viewer.zoom_step(-1, at_cursor=False))
+        zoom_in = QPushButton("+")
+        zoom_in.setToolTip("Zoom in (one mouse-wheel step)")
+        zoom_in.clicked.connect(lambda: self.viewer.zoom_step(1, at_cursor=False))
         self.overlay_label = QLabel("Overlay")
         for w in (QLabel("View"), self.view_combo, self.overlay_label, self.opacity, self.hold, self.side):
             bar.addWidget(w)
         bar.addStretch(1)
+        bar.addWidget(zoom_out)
+        bar.addWidget(zoom_in)
         bar.addWidget(fit)
         bar.addWidget(full)
         bar_host = QWidget()
@@ -429,6 +599,10 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setWordWrap(True)
+        self.table.setItemDelegate(WrapDelegate(self.table))
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)    # cells wrap instead
+        self.table.horizontalHeader().setMinimumSectionSize(60)
+        self.table.horizontalHeader().sectionResized.connect(lambda *_: self.table.resizeRowsToContents())
         self.table_search = QLineEdit()
         self.table_search.setPlaceholderText("Search properties and values")
         self.table_search.setClearButtonEnabled(True)
@@ -471,9 +645,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.pool.clear()                            # queued analyses must not keep the process alive
         self.generation += 1
-        cfg = online.load_config()
-        cfg["sidebars"] = [self.tree_dock.width(), self.details_dock.width()]
-        online.save_config(cfg)
         super().closeEvent(event)
 
     # ------------------------------------------------------------------ loading
@@ -507,23 +678,50 @@ class MainWindow(QMainWindow):
         self.lines = {name: [] for name in geometry.SETS}
         self.errors.clear()
         self.pending.clear()
+        self.run_log.clear()
         self.setWindowTitle(f"{ev.path.name} - {APP_NAME}")
         self._set_enabled(True)
         for item in self.items.values():
             item.setIcon(0, dot("#3a3d44"))
         self.dashboard.set_evidence(ev)
+        self.btn_scan.setText("Scan ...")
         self.tree.setCurrentItem(self.home)
         self.stack.setCurrentIndex(0)
-        self.scan()
+        stored = online.recall_sightengine(ev)
+        if stored is not None:
+            self._on_done(self._job_key("online:Sightengine"), stored, "", self.generation)
+        QTimer.singleShot(0, self.scan)              # after the drop / file dialog has fully returned
 
     def scan(self):
+        """Ask which analyses to run, then run them."""
         if self.ev is None:
             return
+        from .dialogs import ScanDialog
+        dialog = ScanDialog([t for t in ALL_TOOLS if t.id != "geometry"], self.scan_selection, self)
+        if dialog.exec() != ScanDialog.Accepted:
+            return
+        self.scan_selection = dialog.selected()
+        chosen = [t for t in ALL_TOOLS if t.id in self.scan_selection]
+        uploads = [t.title for t in chosen if t.manual]
+        confirmed = bool(uploads) and QMessageBox.question(
+            self, APP_NAME, f"This uploads\n\n{self.ev.path.name}\n\nto {', '.join(uploads)}: third-party "
+            "services. Continue?\n\nNo runs the other analyses without uploading.") == QMessageBox.Yes
         self.pool.clear()                            # drop queued duplicates; whatever was pending is queued again
-        again = [t for t in ALL_TOOLS if t.auto or (t.id in self.pending and not t.manual)]
+        again = [t for t in ALL_TOOLS if t.id in self.scan_selection or (t.id in self.pending and not t.manual)]
         self.pending.clear()
+        self.run_log.clear()                         # the progress overview starts again with every scan
         for tool in again:
-            self.run_tool(tool)
+            self.run_tool(tool, confirmed=confirmed)
+        self.btn_scan.setText("Re-run scan ...")
+        if self.pending:
+            self.show_progress()
+
+    def show_progress(self):
+        if self.progress_dialog is None:
+            self.progress_dialog = ProgressDialog(self)
+        self.progress_dialog.refresh()
+        self.progress_dialog.show()
+        self.progress_dialog.raise_()
 
     # ------------------------------------------------------------------ running tools
     def _run_dirty(self):
@@ -535,13 +733,23 @@ class MainWindow(QMainWindow):
         """confirmed: the user agreed to the upload; tools that send the image away never start without it."""
         if self.ev is None or (tool.manual and not confirmed):
             return
+        self.run_log[tool.id] = "waiting"
         self.pending.add(tool.id)
         self.items[tool.id].setIcon(0, dot(theme.ACCENT))
         if tool.id in self.dashboard.cards:
             self.dashboard.cards[tool.id].set_running()
-        key = f"{tool.id}|{sorted(self.params[tool.id].items())}"
+        key = self._job_key(tool.id)
         self.pool.start(Job(key, tool.fn, (self.ev,), dict(self.params[tool.id]), self.generation, self.signals))
         self._update_progress()
+
+    def _job_key(self, tool_id: str) -> str:
+        return f"{tool_id}|{sorted(self.params[tool_id].items())}"
+
+    def _on_started(self, key: str, generation: int):
+        tool_id = key.partition("|")[0]
+        if generation == self.generation and key == self._job_key(tool_id) and tool_id in self.pending:
+            self.run_log[tool_id] = "running"
+            self._update_progress()
 
     def _on_done(self, key: str, res, error: str, generation: int):
         tool_id, _, used = key.partition("|")
@@ -550,6 +758,8 @@ class MainWindow(QMainWindow):
         if used != str(sorted(self.params[tool_id].items())):
             return                                   # parameters changed while it ran; a newer job is on its way
         self.pending.discard(tool_id)
+        if tool_id in self.run_log:                  # a recalled online result is not a run
+            self.run_log[tool_id] = "failed" if res is None else "done"
         if res is None:
             self.errors[tool_id] = error
             self.results.pop(tool_id, None)
@@ -560,16 +770,20 @@ class MainWindow(QMainWindow):
             self.items[tool_id].setIcon(0, dot(result_color(res)))
         if tool_id in self.dashboard.cards:
             self.dashboard.cards[tool_id].set_result(res, error)
-        auto_pending = sum(1 for t in TOOLS if t.auto and t.id in self.pending)
-        self.dashboard.set_verdicts(summarize(self.results), auto_pending)
+        self.dashboard.set_verdicts(summarize(self.results), len(self.pending))
         if self.current and self.current.id == tool_id:
             self._show_result()
         self._update_progress()
 
     def _update_progress(self):
         n = len(self.pending)
-        self.progress.setVisible(n > 0)
-        self.progress.setRange(0, 0)
+        done = sum(state in ("done", "failed") for state in self.run_log.values())
+        self.progress.setVisible(bool(self.run_log))  # stays after the round finishes, to reopen the overview
+        self.progress.setRange(0, max(len(self.run_log), 1))
+        self.progress.setValue(done)
+        self.progress.setFormat("in progress" if n else "scans complete")
+        if self.progress_dialog is not None and self.progress_dialog.isVisible():
+            self.progress_dialog.refresh()
         self.statusBar().showMessage(f"Running {n} analysis job(s) ..." if n else "Ready", 0 if n else 4000)
 
     # ------------------------------------------------------------------ tool selection
@@ -659,34 +873,67 @@ class MainWindow(QMainWindow):
             return
         values = self.params[tool.id]
 
+        resets: dict[str, QToolButton] = {}
+
+        def show_resets():                           # a reset button is live only while its option is changed
+            for p in tool.params:
+                resets[p.key].setEnabled(values[p.key] != p.default)
+            reset_all.setEnabled(any(b.isEnabled() for b in resets.values()))
+
         def changed(key, value):
             values[key] = value
+            show_resets()
             if self._dirty not in (None, tool):      # options of another tool are still waiting: run that one now
                 self._run_dirty()
             self._dirty = tool
             self.debounce.start()
 
+        setters = []
         for p in tool.params:
             if p.choices:
                 w = QComboBox()
                 w.addItems(p.choices() if callable(p.choices) else p.choices)
                 w.setCurrentText(str(values[p.key]))
                 w.currentTextChanged.connect(lambda v, k=p.key: changed(k, v))
+                setter = lambda w=w, d=p.default: w.setCurrentText(str(d))
             elif isinstance(p.default, bool):
                 w = QCheckBox()
                 w.setChecked(bool(values[p.key]))
                 w.toggled.connect(lambda v, k=p.key: changed(k, v))
+                setter = lambda w=w, d=p.default: w.setChecked(d)
             elif isinstance(p.default, float):
                 w = QDoubleSpinBox()
                 w.setRange(p.lo, p.hi)
                 w.setSingleStep(p.step)
                 w.setValue(float(values[p.key]))
                 w.valueChanged.connect(lambda v, k=p.key: changed(k, v))
+                setter = lambda w=w, d=p.default: w.setValue(d)
             else:
-                w = self._int_slider(p, values, changed)
-            self.form.addRow(p.label, w)
+                w, box = self._int_slider(p, values, changed)
+                setter = lambda box=box, d=p.default: box.setValue(int(d))
+            reset = QToolButton()
+            reset.setIcon(reset_icon())
+            reset.setToolTip(f"Reset to {p.default}")
+            reset.clicked.connect(lambda _=False, setter=setter: setter())    # clicked passes "checked"
+            resets[p.key] = reset
+            setters.append(setter)
+            host = QWidget()
+            row = QHBoxLayout(host)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(w, 1)
+            row.addWidget(reset)
+            self.form.addRow(p.label, host)
+        if tool.params:
+            reset_all = QPushButton(reset_icon(), "Reset all")
+            reset_all.setToolTip("Put every option of this tool back to its default")
+            reset_all.clicked.connect(lambda: [setter() for setter in setters])
+            row = QHBoxLayout()
+            row.addStretch(1)
+            row.addWidget(reset_all)
+            self.form.addRow(row)
+            show_resets()
 
-    def _int_slider(self, p, values, changed) -> QWidget:
+    def _int_slider(self, p, values, changed) -> tuple[QWidget, QSpinBox]:
         host = QWidget()
         row = QHBoxLayout(host)
         row.setContentsMargins(0, 0, 0, 0)
@@ -704,7 +951,7 @@ class MainWindow(QMainWindow):
                                             changed(p.key, max(int(p.lo), v // step * step))))
         row.addWidget(slider, 1)
         row.addWidget(box)
-        return host
+        return host, box
 
     # ------------------------------------------------------------------ showing results
     def _show_result(self):
@@ -733,12 +980,22 @@ class MainWindow(QMainWindow):
             parts.append(f'<p><span style="color:{color}">&#9679; <b>{html.escape(f.title)}</b></span><br>'
                          f'<span style="color:#c4c6cc">{detail}</span></p>')
         self.findings.setHtml("".join(parts))
+        self.table.clearSpans()
         self.table.setRowCount(len(res.table))
         for i, (k, v) in enumerate(res.table):
             self.table.setItem(i, 0, QTableWidgetItem(str(k)))
             self.table.setItem(i, 1, QTableWidgetItem(str(v)))
+            if str(k).startswith("--- ") and str(k).endswith(" ---") and not v:     # a section heading
+                item = self.table.item(i, 0)
+                item.setText(str(k)[4:-4])
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+                item.setForeground(QColor(theme.ACCENT).lighter(150))
+                self.table.setSpan(i, 0, 1, 2)
         self.table.resizeColumnToContents(0)
-        self.table.setColumnWidth(0, min(self.table.columnWidth(0), 210))
+        self.table.setColumnWidth(0, min(self.table.columnWidth(0), 210, int(self.table.viewport().width() * 0.45)))
+        self.table.resizeRowsToContents()          # wrapped cells: rows as tall as their text
         self._filter_table()
 
     def _filter_table(self):

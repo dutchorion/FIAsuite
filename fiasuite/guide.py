@@ -53,6 +53,88 @@ GUIDE: dict[str, dict] = {
                     ("Content Credentials Verify (the reference web checker)", "https://contentcredentials.org/verify"),
                     ("c2pa-python, the library used here", "https://opensource.contentauthenticity.org/docs/c2pa-python/")],
     },
+    "computational": {
+        "what": "A smartphone photo is rarely one exposure. By default phones merge a burst of frames (Smart HDR, "
+                "HDR+, multi-frame processing), stack frames in low light (Night mode, Night Sight), crop and enlarge "
+                "when zooming (digital zoom, multi-frame super-resolution, and on some models generative AI zoom), "
+                "blur the background from a depth map (portrait mode, bokeh) and apply AI scene enhancement. This "
+                "check names the default processing of the phone that took the picture and lists every trace of it "
+                "recorded in the file.",
+        "read": ["The table goes section by section - device, camera module, exposure, camera mode, multi-frame and "
+                 "HDR, depth and portrait, zoom, scene and style processing, embedded media, and the model's default "
+                 "processing. Each row names the ExifTool tag, its value and what it means; rows marked [evidence] "
+                 "prove computational capture.",
+                 "Examples of what it can tell: which camera module took the picture (ultra-wide, main, telephoto, "
+                 "front) from the lens name and the 35 mm-equivalent focal length; how many frames were merged (Pixel "
+                 "FrameCount, EXIF CompositeImageCount); the Photographic Style preset on an iPhone; a long handheld "
+                 "exposure or low light that points to night stacking; a Live Photo or motion-photo video recorded "
+                 "around the shot.",
+                 "'Smartphone with computational photography by default': the camera model is a phone that merges "
+                 "frames for every photo.",
+                 "'Computational capture recorded in the file': concrete traces, each with the tag it comes from - "
+                 "EXIF CompositeImage (with the number of source frames), iOS HDR and Portrait renderings, Apple's and "
+                 "Google's HDR records, embedded depth maps, gain maps, digital zoom, the IPTC 'computational "
+                 "capture' declaration and Samsung's capture records.",
+                 "Both are orange: a reason to review, not a finding of manipulation. The pixels were computed by the "
+                 "camera, so treat fine detail, texture and noise with care, and prefer the original file.",
+                 "Merged, sharpened, depth-blurred or enlarged pixels can make the noise, CFA, resampling and ELA "
+                 "tools and the AI detectors respond. Read their results with this in mind."],
+        "pitfalls": ["Almost every smartphone sold since 2018 merges frames by default, so almost every phone photo "
+                     "is flagged. The flag says how the picture was made, not that it is false.",
+                     "Without camera metadata (stripped by most platforms) nothing can be said either way.",
+                     "Generative zoom (Pixel 10 Pro Pro Res Zoom beyond 30x) and Samsung's AI moon enhancement add "
+                     "detail the sensor did not record. The C2PA tool shows Google's signed 'edited with AI' label "
+                     "where it survives.",
+                     "Brand-level defaults for makers other than Apple, Google and Samsung are general industry "
+                     "practice, not checked model by model."],
+        "sources": [("IPTC Digital Source Type: multi-frame computational capture",
+                     "https://cv.iptc.org/newscodes/digitalsourcetype/computationalCapture"),
+                    ("Google Research: every HDR+ photo is a composite of a burst",
+                     "https://research.google/blog/introducing-the-hdr-burst-photography-dataset/"),
+                    ("Samsung: how Galaxy cameras combine super-resolution and AI for the moon",
+                     "https://www.samsungmobilepress.com/feature-stories/how-samsung-galaxy-cameras-combine-super-"
+                     "resolution-technologies-with-ai-technology-to-produce-high-quality-images-of-the-moon"),
+                    ("PhoneArena: Pixel 10 Pro Res Zoom - when is a photo not a photo anymore?",
+                     "https://www.phonearena.com/news/pixel-10-pro-res-zoom-when-is-a-photo-not-a-photo-anymore_id173458"),
+                    ("Gigazine: Google Pixel 10 attaches C2PA Content Credentials",
+                     "https://gigazine.net/gsc_news/en/20250830-google-pixel-10-c2pa"),
+                    ("Macworld: Deep Fusion and Smart HDR on the iPhone 11",
+                     "https://www.macworld.com/article/233656/how-to-enable-or-disable-deep-fusion-and-smart-hdr-on-the-iphone-11.html"),
+                    ("ExifTool tag names (EXIF CompositeImage, CustomRendered; Apple, Google, Samsung)",
+                     "https://exiftool.org/TagNames/"),
+                    ("ExifTool sample images, used to check the tags on real phone files",
+                     "https://exiftool.org/sample_images.html")],
+    },
+    "trustmark": {
+        "what": "Decodes Adobe TrustMark, an open invisible watermark (MIT licence) that the C2PA lists as a 'soft "
+                "binding': an identifier hidden in the pixels. Unlike a C2PA manifest it survives metadata stripping, "
+                "re-saving and moderate JPEG compression, so a file's Content Credentials can be looked up again by it "
+                "('durable Content Credentials').",
+        "read": ["Both published decoders run: variant Q (the default) and P (low visibility). Variants are not "
+                 "interchangeable; a mark is reported by the decoder that matches it.",
+                 "A mark counts only when its error correction is valid AND the decoder's signal is strong. Signal "
+                 "strength is the network's average confidence per bit: marked images read about 5-9, unmarked ones "
+                 "below about 2.",
+                 "The payload is an identifier chosen by whoever embedded it, shown in hex (and as text when it looks "
+                 "like words). Only that party's repository can turn it back into Content Credentials.",
+                 "A watermark together with a missing or invalid C2PA manifest means the metadata was removed or the "
+                 "file was changed after watermarking."],
+        "pitfalls": ["Absence means nothing: few services embed TrustMark, and strong cropping or resizing removes it. "
+                     "Variant P trades robustness for invisibility: in a small JPEG even Adobe's own decoder misses it.",
+                     "Adobe's own reference decoder accepts any bit pattern its error correction can repair; on 202 "
+                     "unmarked images that gave 14 false hits. FIASuite therefore also requires a strong signal, which "
+                     "rejected all of them.",
+                     "The BCH_SUPER schema is also TrustMark's 'signpost' to a second watermark from another vendor. Its "
+                     "payload layout is not documented; a registry name shown for it is a lead, not a decoded fact.",
+                     "A watermark says the file passed through software that embeds it. It says nothing about whether "
+                     "the scene is real or AI-generated."],
+        "sources": [("Adobe TrustMark (code, models, MIT licence)", "https://github.com/adobe/trustmark"),
+                    ("T. Bui, S. Agarwal, J. Collomosse, TrustMark: Universal Watermarking for Arbitrary Resolution "
+                     "Images (2023)", "https://arxiv.org/abs/2311.18297"),
+                    ("Content Authenticity Initiative: durable Content Credentials",
+                     "https://contentauthenticity.org/blog/digital-watermarking-interoperable-durable-content-credentials"),
+                    ("C2PA soft-binding algorithm list", "https://github.com/c2pa-org/softbinding-algorithm-list")],
+    },
     "jpeg": {
         "what": "The internal structure of the JPEG container: marker sequence, quantization tables, chroma "
                 "subsampling, application segments, and any bytes after the end of the image.",
@@ -268,14 +350,25 @@ GUIDE: dict[str, dict] = {
                      "A generator the networks never saw can pass almost unnoticed.",
                      "Independent 2026 benchmarks put the best open detectors near 78 % accuracy overall and at 18-30 % "
                      "on the newest commercial generators. A low score does NOT establish authenticity.",
-                     "Recompression, resizing and screenshots lower accuracy further. Use Calibrate on your own material."],
+                     "Recompression, resizing and screenshots lower accuracy further. Use Calibrate on your own material.",
+                     "Local AI edits (inpainting, generative fill) are judged unreliably. Detectors react mainly to the "
+                     "traces the generator's encoder leaves across the WHOLE picture, not to the edited area: an "
+                     "inpainted photo can be rated fully generated, and an edit pasted back into the original pixels can "
+                     "pass unnoticed (Nebioglu et al., 2026). Use TruFor and the signal tools to localise an edit.",
+                     "Documents (invoices, receipts, certificates, screenshots of text) are harder than photographs: "
+                     "detectors trained on natural images lose more than 7 points of AUC on AI-generated documents "
+                     "(Fu et al., 2026). Treat a low score on a document with extra caution."],
         "sources": [("J. Park & A. Owens, Community Forensics (paper)", "https://arxiv.org/abs/2411.04125"),
                     ("Community Forensics model", "https://huggingface.co/OwensLab/commfor-model-384"),
                     ("SwinV2 AI-image detector model", "https://huggingface.co/haywoodsloan/ai-image-detector-deploy"),
                     ("F. Guillaro et al., B-Free: A Bias-Free Training Paradigm for More General AI-generated Image "
                      "Detection, CVPR 2025 (code, weights and licence)", "https://github.com/grip-unina/B-Free"),
                     ("OpenFake - the benchmark of current generators used for the figures above",
-                     "https://huggingface.co/datasets/ComplexDataLab/OpenFake"), BENCHMARK],
+                     "https://huggingface.co/datasets/ComplexDataLab/OpenFake"), BENCHMARK,
+                    ("Nebioglu, Bilgiç & Popescu, AI-Generated Image Detectors Overrely on Global Artifacts: "
+                     "Evidence from Inpainting Exchange (2026)", "https://arxiv.org/abs/2602.00192"),
+                    ("Z. Fu et al., Beyond Natural Images: Rethinking AI-Generated Image Detection in Documents (2026)",
+                     "https://arxiv.org/abs/2609.14352")],
     },
     "trufor": {
         "what": "TruFor combines the image with a learned camera-noise fingerprint (Noiseprint++) in a transformer and "
@@ -381,11 +474,13 @@ GUIDE: dict[str, dict] = {
         "pitfalls": ["'not detected' does NOT show authenticity: the check recognises OpenAI content only, older OpenAI "
                      "images carry no watermark, and metadata is lost on re-saving.",
                      "Strict rate limits; uploads are not covered by OpenAI's zero-data-retention option.",
-                     "Google's SynthID for Gemini/Imagen images has no public API: use the Watermark check menu."],
+                     "SynthID marks from Google, NVIDIA and Kakao tools are not covered here: use 'Watermark check' "
+                     "in the toolbar (Google's SynthID Detector)."],
         "sources": [("OpenAI API: Content provenance guide", "https://developers.openai.com/api/docs/guides/content-provenance"),
                     ("OpenAI Help: provenance signals in OpenAI-generated content",
                      "https://help.openai.com/en/articles/8912793-c2pa-and-synthid-in-openai-generated-images"),
-                    ("Google DeepMind: SynthID", "https://deepmind.google/models/synthid/")],
+                    ("Google DeepMind: SynthID", "https://deepmind.google/models/synthid/"),
+                    ("Google: SynthID Detector", "https://synthid.com/")],
     },
 }
 

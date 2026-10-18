@@ -86,3 +86,11 @@ def test_views_are_images(ev):
                noise.residual, noise.noise_map, interpolation.resampling, interpolation.cfa, spectral.spectrum):
         for view in fn(ev("splice")).views.values():
             assert view.dtype == np.uint8 and view.ndim == 3 and view.shape[2] == 3
+
+
+@pytest.mark.parametrize("side", [8, 400])
+def test_noise_map_on_flat_or_tiny_images(tmp_path, side):
+    """An image smaller than one block, or with no usable texture, is reported, not a crash."""
+    path = synth.save(tmp_path / f"white{side}.png", np.full((side, side, 3), 255, np.uint8))
+    titles = [f.title for f in noise.noise_map(Evidence(str(path))).findings]
+    assert titles in (["Image too small for this block size"], ["Too few smooth regions to compare noise levels"])

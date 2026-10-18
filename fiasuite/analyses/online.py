@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 
 import requests
 
@@ -34,6 +35,79 @@ def save_config(config: dict) -> bool:
         return False
 
 
+def results_path():
+    return app_dir() / "online_results.json"
+
+
+def _stored() -> dict:
+    try:
+        stored = json.loads(results_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return stored if isinstance(stored, dict) else {}
+
+
+def remember(ev: Evidence, service: str, reply: dict) -> None:
+    """Keep a service's reply, keyed by the file's SHA-256, so reopening the file shows it without a new upload."""
+    stored = _stored()
+    stored.setdefault(ev.hashes["sha256"], {})[service] = {
+        "time": datetime.now().isoformat(timespec="seconds"), "file": ev.path.name, "reply": reply}
+    temp = results_path().with_suffix(".json.tmp")
+    try:
+        temp.write_text(json.dumps(stored, indent=1), encoding="utf-8")
+        os.replace(temp, results_path())
+    except OSError:
+        pass                                       # read-only folder: the result is shown, just not kept
+
+
+def recall_sightengine(ev: Evidence) -> Result | None:
+    entry = _stored().get(ev.hashes["sha256"], {}).get("Sightengine")
+    if not isinstance(entry, dict) or not isinstance(entry.get("reply"), dict):
+        return None
+    res = sightengine_result(entry["reply"])
+    when = str(entry.get("time", "")).replace("T", " ")
+    res.findings.append(Finding(INFO, f"Stored Sightengine result from {when}",
+                                "Recalled from an earlier check of this exact file (same SHA-256); nothing was uploaded "
+                                "now. Press 'Upload and analyse' to ask Sightengine again."))
+    return res
+
+
+def _rows(scores: dict, indent: str = "") -> list[tuple[str, str]]:
+    """Every score in the reply, nested groups indented and sorted from high to low."""
+    rows = []
+    for name, value in sorted(scores.items(), key=lambda kv: -kv[1] if isinstance(kv[1], (int, float)) else 0):
+        label = indent + str(name).replace("_", " ")
+        if isinstance(value, dict):
+            rows += [(label, "")] + _rows(value, indent + "  ")
+        elif isinstance(value, (int, float)):
+            rows.append((label, f"{value:.1%}"))
+        else:
+            rows.append((label, str(value)))
+    return rows
+
+
+def sightengine_result(reply: dict) -> Result:
+    """Turn a successful reply of the genai model into a result. Shows every score under 'type', not only the
+    known ones, so categories Sightengine adds later (generator families such as diffusion / GAN / other) appear too."""
+    res = Result()
+    kind = reply.get("type", {})
+    score = float(kind.get("ai_generated", 0))
+    res.score = score
+    res.table = [("AI-generated probability", f"{score:.1%}")]
+    res.table += _rows({k: v for k, v in kind.items() if k != "ai_generated"})
+    breakdown = sorted(((str(name).replace("_", " "), value) for group in kind.values() if isinstance(group, dict)
+                        for name, value in group.items() if isinstance(value, (int, float))), key=lambda kv: -kv[1])
+    top = ", ".join(f"{name} {value:.0%}" for name, value in breakdown[:3] if value >= 0.1)
+    likely = f" Most likely source: {top}." if top else ""
+    if score > 0.85:
+        res.findings.append(Finding(ALERT, "Sightengine: AI-generated", f"Probability {score:.0%}.{likely}"))
+    elif score > 0.5:
+        res.findings.append(Finding(WARN, "Sightengine: probably AI-generated", f"Probability {score:.0%}.{likely}"))
+    else:
+        res.findings.append(Finding(INFO, "Sightengine: not flagged", f"Probability {score:.0%}."))
+    return res
+
+
 def sightengine(ev: Evidence) -> Result:
     """https://sightengine.com/docs/ai-generated-image-detection"""
     res = Result()
@@ -52,20 +126,8 @@ def sightengine(ev: Evidence) -> Result:
     if reply.get("status") != "success":
         res.findings.append(Finding(NOTE, "Sightengine returned an error", json.dumps(reply.get("error", reply))[:300]))
         return res
-    kind = reply.get("type", {})
-    score = float(kind.get("ai_generated", 0))
-    res.score = score
-    res.table = [("AI-generated probability", f"{score:.1%}")]
-    generators = sorted((kind.get("ai_generators") or {}).items(), key=lambda kv: -kv[1])
-    res.table += [(f"  {name}", f"{value:.1%}") for name, value in generators]
-    if score > 0.85:
-        likely = f" Most likely generator: {generators[0][0]}." if generators and generators[0][1] > 0.3 else ""
-        res.findings.append(Finding(ALERT, "Sightengine: AI-generated", f"Probability {score:.0%}.{likely}"))
-    elif score > 0.5:
-        res.findings.append(Finding(WARN, "Sightengine: probably AI-generated", f"Probability {score:.0%}."))
-    else:
-        res.findings.append(Finding(INFO, "Sightengine: not flagged", f"Probability {score:.0%}."))
-    return res
+    remember(ev, "Sightengine", reply)
+    return sightengine_result(reply)
 
 
 def _upload_type(ev: Evidence) -> str | None:

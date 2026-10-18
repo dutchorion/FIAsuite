@@ -32,15 +32,18 @@ Dots in the tool list: green = nothing found, yellow = note, orange = suspicious
 | Calibrate | Measure a detector on **your own** authentic and manipulated images (AUC, detection rate at 1 % and 5 % false alarms), also after "laundering" such as `resize0.5+jpeg75` |
 | Export report | HTML or PDF case report (hashes, parameters, findings, maps) and a JSON record for machines. Tick which analyses to include (check all / none). The PDF is laid out on A4: every analysis starts on a new page, a page that continues a section is headed "<section> (continued)", every image is fitted to the column and none is split across pages, each page carries the file name, hash and page number |
 | Reverse image search | Copies the image to the clipboard and opens Google Lens / TinEye / Bing / Yandex: press Ctrl+V there |
-| Watermark check | Same clipboard hand-over for provenance checks that only exist as web pages: Google Gemini and the SynthID Detector portal (Google's SynthID watermark), OpenAI's verify page |
+| Watermark check | Opens Google's SynthID Detector (synthid.com) in the browser. Detects the invisible SynthID watermark of Google, OpenAI, NVIDIA and Kakao tools; sign in there with a Google, OpenAI or Apple account and upload the file yourself |
 | Settings | API key for the optional online detector |
 
 ## The tools
 
 **File & provenance** - ExifTool metadata with consistency rules (AI-generator tags, editing software, XMP
 history, Photoshop document ancestors, date conflicts, missing MakerNotes), C2PA Content Credentials with
-signature validation, JPEG structure (quantization tables, quality, trailing data), embedded-thumbnail
-comparison, hashes, string extraction.
+signature validation, computational photography (smartphones that merge frames, zoom digitally or blur
+backgrounds by default, and the traces of it in the file), Adobe TrustMark watermark (the C2PA soft binding
+behind durable Content Credentials),
+JPEG structure (quantization tables, quality, trailing data), embedded-thumbnail comparison, hashes, string
+extraction.
 
 **Compression** - Error level analysis (automatic error scale); JPEG ghosts (Farid) including misaligned grids;
 DCT histograms for double compression and JPEG history inside PNG files, with a per-block double-quantization
@@ -64,7 +67,7 @@ for the invisible watermark of Stable Diffusion's reference software (SD 1.x, 2.
 magnifier enhancement, histogram with contrast-adjustment traces, hidden pixels under transparency, luminance
 gradient, principal components, level sweep, bit planes, colour channels (the Forensically tool set).
 
-**Online (optional)** - Sightengine AI detection with per-generator scores; OpenAI provenance check (OpenAI's Content Credentials and its invisible SynthID watermark, which survives screenshots and recompression, for content made with OpenAI tools only). Both need your own API key under Settings and upload only on your click. Google offers no public API for its SynthID image watermark, hence the *Watermark check* menu.
+**Online (optional)** - Sightengine AI detection with per-generator scores; OpenAI provenance check (OpenAI's Content Credentials and its invisible SynthID watermark, which survives screenshots and recompression, for content made with OpenAI tools only). Both need your own API key under Settings and upload only on your click. Google offers no public API for its SynthID Detector, hence the *Watermark check* button.
 
 ## Reading the results honestly
 
@@ -115,6 +118,13 @@ B-Free is offered as an optional third detector but is *not* counted: on this ma
 rated 10 of 90 photographs as generated, and adding it did not improve the ensemble (AUC 0.952 to 0.944). The SwinV2 detector, which earlier
 spot checks had marked as unreliable, turned out to be the strongest single model here and has full weight.
 
+**OmniAID (October 2026).** OmniAID v2 (ICML 2026) was measured on a fresh sample of the same OpenFake test
+data: 275 images from 20 generators, 100 DOCCI and 100 ImageNet photographs. Alone it reached AUC 0.918 (161 of
+275 generated images and 4 of 200 photographs above 50 %), against 0.932 for Community Forensics and 0.953 for
+SwinV2. Adding it to the ensemble moved the AUC from 0.973 to 0.976 and found 196 instead of 201 generated
+images, with 1 photograph above 50 % either way: no gain worth a 1 GB model at 1.7 s per image on the CPU, so it
+was not added to the program. Flux.2 stays the blind spot: 3 of 25 for the ensemble.
+
 What the measurements changed. Several detectors that passed every synthetic test failed on real content and
 were reworked: JPEG ghosts found 0 of 40 real inserts (now 27) because the valley in the error curve is shallower
 on real texture and the insert's grid alignment was not being proposed; on re-saved images harmonics of the
@@ -140,8 +150,9 @@ tool); a low score never establishes authenticity.
 | `FIASuite-slim` folder (0.4 GB) | copy it, double-click **FIASuite.exe** | the setup wizard offers to download ExifTool and the models |
 | a git clone / source zip | double-click **FIASuite.bat** | finds Python 3.12 (offers to install it with winget if it is missing), creates a private environment in the folder, installs the packages, starts the program; then the setup wizard as above |
 
-**Setup wizard.** At start-up the program checks for ExifTool and the three standard models (the optional B-Free
-detector is not offered by the wizard; it is created with `tools/convert_models.py bfree`). If something is missing
+**Setup wizard.** At start-up the program checks for ExifTool, the three standard models and the two TrustMark
+decoders (the optional B-Free detector is not offered by the wizard; it is created with
+`tools/convert_models.py bfree`). If something is missing
 it lists each item with its size, source and licence, and installs what you tick: files are downloaded,
 verified against SHA-256 checksums and placed next to the program. Nothing else on the PC is changed. It can
 be reopened any time with **Setup ...** and silenced with "Do not show this at start-up again".
@@ -187,6 +198,9 @@ ONNX; it needs a separate environment with PyTorch (the program itself does not)
     .venv-convert\Scripts\pip install timm onnx onnxruntime huggingface_hub safetensors pyyaml yacs numpy
     git clone https://github.com/grip-unina/TruFor models/_src/TruFor
     .venv-convert\Scripts\python tools\convert_models.py commfor swinv2 trufor bfree
+
+`tools/bench_ai_detectors.py` measures the installed detectors and every ensemble of them on a labelled folder
+(the OpenFake figures above); `tools/make_trustmark_fixtures.py` re-creates the TrustMark test images.
 
 After a new conversion, upload the files to a new release tag and update the tag and SHA-256 values in
 `fiasuite/components.py`.

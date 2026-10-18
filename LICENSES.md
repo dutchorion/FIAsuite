@@ -12,6 +12,9 @@ FIASuite is assembled for personal and research use. Some bundled models do not 
 | SwinV2 AI-image detector (haywoodsloan, ONNX by LPX55) | Apache-2.0 | `models/swinv2_detector_fp16.onnx`; training data undocumented |
 | **TruFor** (Guillaro, Cozzolino, Sud, Dufour, Verdoliva - GRIP-UNINA, CVPR 2023) | **Research licence, non-commercial only** | `models/trufor_1024.onnx`; delete this file and its entry in `models.json` for any commercial use |
 | **B-Free** (Guillaro, Zingarini, Usman, Sud, Cozzolino, Verdoliva - GRIP-UNINA, CVPR 2025) | **GRIP-UNINA licence: informational and nonprofit use only** | optional `models/bfree_dinov2_504.onnx`, converted from the authors' weights (github.com/grip-unina/B-Free); delete the file and its `models.json` entry for any commercial use |
+| Adobe TrustMark decoders Q and P | MIT | `models/trustmark_decoder_Q.onnx`, `models/trustmark_decoder_P.onnx`, Adobe's ONNX exports, unmodified |
+| Adobe TrustMark BCH error correction | MIT | `fiasuite/analyses/_trustmark_bch.py`, copied unchanged from github.com/adobe/trustmark |
+| C2PA soft-binding algorithm list (Coalition for Content Provenance and Authenticity) | CC BY 4.0 | identifiers and algorithm names from github.com/c2pa-org/softbinding-algorithm-list, snapshot of 18 October 2026 in `fiasuite/analyses/trustmark.py` |
 | invisible-watermark (ShieldMnt) | MIT | the dwtDct decoding rule is re-implemented in `fiasuite/analyses/watermark.py`; no code or files of the library are bundled |
 | Guide example pictures | CC0 / public domain | made from Wikimedia Commons photographs, credits in `fiasuite/guide_examples/SOURCES.md` |
 | imtriage 0.2.0 | MIT | source of the spectral-residual refinements (Wiener residual, radial flattening, peak classes, angular profile), the laundering chains and the calibration method |

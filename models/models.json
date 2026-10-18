@@ -74,5 +74,27 @@
     "license": "GRIP-UNINA licence (informational and nonprofit use only)",
     "source": "https://github.com/grip-unina/B-Free",
     "weight": 0
+  },
+  {
+    "id": "trustmark_q",
+    "name": "Adobe TrustMark decoder Q",
+    "file": "trustmark_decoder_Q.onnx",
+    "kind": "trustmark",
+    "variant": "Q",
+    "size": 256,
+    "square": false,
+    "license": "MIT",
+    "source": "https://github.com/adobe/trustmark (ONNX: cai-watermark.adobe.net/watermarking/trustmark-models/decoder_Q.onnx)"
+  },
+  {
+    "id": "trustmark_p",
+    "name": "Adobe TrustMark decoder P",
+    "file": "trustmark_decoder_P.onnx",
+    "kind": "trustmark",
+    "variant": "P",
+    "size": 224,
+    "square": true,
+    "license": "MIT",
+    "source": "https://github.com/adobe/trustmark (ONNX: cai-watermark.adobe.net/watermarking/trustmark-models/decoder_P.onnx)"
   }
 ]

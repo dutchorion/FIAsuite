@@ -36,6 +36,7 @@ QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QStatusBar {{ background: {PANEL}; border-top: 1px solid {BORDER}; color: {MUTED}; }}
 QProgressBar {{ background: {RAISED}; border: none; border-radius: 3px; height: 6px; text-align: center; }}
 QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}
+QProgressBar#status {{ height: 18px; font-size: 8pt; font-weight: 600; color: white; }}
 QFrame#card {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 10px; }}
 QFrame#card:hover {{ border-color: {ACCENT}; }}
 QLabel#muted {{ color: {MUTED}; }} QLabel#h1 {{ font-size: 16pt; font-weight: 600; }} QLabel#h2 {{ font-size: 11pt; font-weight: 600; }}
@@ -47,6 +48,9 @@ QCheckBox::indicator:disabled {{ border-color: {BORDER}; }}
 QListWidget::item {{ padding: 4px 2px; }}
 QListWidget::indicator {{ width: 15px; height: 15px; border: 1px solid #5a5d66; border-radius: 4px; background: {RAISED}; }}
 QListWidget::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
+QTreeWidget::indicator {{ width: 15px; height: 15px; border: 1px solid #5a5d66; border-radius: 4px; background: {RAISED}; }}
+QTreeWidget::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
+QTreeWidget::indicator:indeterminate {{ background: #2a3350; border-color: {ACCENT}; }}
 QSplitter::handle {{ background: {BORDER}; }}
 QToolTip {{ background: {RAISED}; color: {TEXT}; border: 1px solid {BORDER}; }}
 """

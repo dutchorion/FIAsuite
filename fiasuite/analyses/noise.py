@@ -43,12 +43,12 @@ def noise_map(ev: Evidence, block: int = 32, sensitivity: float = 2.5) -> Result
     mean = block_reduce(ev.luma, b)
     gx, gy = cv2.Sobel(ev.luma, cv2.CV_32F, 1, 0), cv2.Sobel(ev.luma, cv2.CV_32F, 0, 1)
     texture = block_reduce(cv2.GaussianBlur(np.hypot(gx, gy), (0, 0), 2), b)
-    valid = (texture < np.percentile(texture, 60)) & (mean > 10) & (mean < 245) & (sigma > 0.05)
 
     res = Result()
-    if valid.size < 30:
+    if texture.size < 30:                          # checked first: an image smaller than one block has no blocks at all
         res.findings.append(Finding(INFO, "Image too small for this block size"))
         return res
+    valid = (texture < np.percentile(texture, 60)) & (mean > 10) & (mean < 245) & (sigma > 0.05)
     shown = np.where(valid, sigma, 0)
     res.views["Noise level"] = heatmap(shown, (ev.height, ev.width), 0, np.percentile(sigma[valid], 98) if valid.any() else 1,
                                        smooth=False)

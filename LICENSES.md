@@ -10,7 +10,6 @@ FIASuite is assembled for personal and research use. Some bundled models do not 
 | c2pa-python (Content Authenticity Initiative) | MIT / Apache-2.0 | |
 | Community Forensics detector (Park & Owens) | MIT | `models/commfor_vits16_384.onnx`, converted from huggingface.co/OwensLab/commfor-model-384 |
 | SwinV2 AI-image detector (haywoodsloan, ONNX by LPX55) | Apache-2.0 | `models/swinv2_detector_fp16.onnx`; training data undocumented |
-| OmniAID v2 detector (Guo et al., ICML 2026) | MIT (Hugging Face model card; the GitHub repository shows an MIT badge but has no licence file) | optional `models/omniaid_v2_clip336.onnx`, converted from huggingface.co/Yunncheng/OmniAID with weights stored as fp16; built on OpenAI CLIP ViT-L/14-336 (MIT) |
 | **TruFor** (Guillaro, Cozzolino, Sud, Dufour, Verdoliva - GRIP-UNINA, CVPR 2023) | **Research licence, non-commercial only** | `models/trufor_1024.onnx`; delete this file and its entry in `models.json` for any commercial use |
 | **B-Free** (Guillaro, Zingarini, Usman, Sud, Cozzolino, Verdoliva - GRIP-UNINA, CVPR 2025) | **GRIP-UNINA licence: informational and nonprofit use only** | optional `models/bfree_dinov2_504.onnx`, converted from the authors' weights (github.com/grip-unina/B-Free); delete the file and its `models.json` entry for any commercial use |
 | Adobe TrustMark decoders Q and P | MIT | `models/trustmark_decoder_Q.onnx`, `models/trustmark_decoder_P.onnx`, Adobe's ONNX exports, unmodified |

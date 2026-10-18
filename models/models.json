@@ -96,27 +96,5 @@
     "square": true,
     "license": "MIT",
     "source": "https://github.com/adobe/trustmark (ONNX: cai-watermark.adobe.net/watermarking/trustmark-models/decoder_P.onnx)"
-  },
-  {
-    "id": "omniaid",
-    "name": "OmniAID v2 (CLIP ViT-L/336)",
-    "file": "omniaid_v2_clip336.onnx",
-    "kind": "classifier",
-    "size": 336,
-    "policy": "whole",
-    "output": "sigmoid",
-    "mean": [
-      0.48145466,
-      0.4578275,
-      0.40821073
-    ],
-    "std": [
-      0.26862954,
-      0.26130258,
-      0.27577711
-    ],
-    "weight": 0,
-    "license": "MIT",
-    "source": "https://github.com/yunncheng/OmniAID (weights: huggingface.co/Yunncheng/OmniAID)"
   }
 ]

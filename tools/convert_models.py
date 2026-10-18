@@ -1,6 +1,6 @@
 """Fetch the neural detectors and convert them to ONNX for the app (run in .venv-convert).
 
-    .venv-convert/Scripts/python tools/convert_models.py commfor swinv2 trufor bfree omniaid
+    .venv-convert/Scripts/python tools/convert_models.py commfor swinv2 trufor bfree
 
 Writes models/*.onnx and merges the matching entries into models/models.json.
 PyTorch is needed only here; the app itself runs the ONNX files with ONNX Runtime.
@@ -41,25 +41,6 @@ def parity(onnx_path: Path, model: torch.nn.Module, sample: torch.Tensor, pick=l
         diff = float(np.abs(e.numpy() - g).max())
         print(f"  parity {name}: max |torch - onnx| = {diff:.2e}")
         assert diff < 1e-2, "ONNX export does not match PyTorch"
-
-
-def fp16_weights(src: Path, dst: Path, min_size: int = 2 ** 16) -> None:
-    """Store the large float32 weights as float16, each followed by a Cast back to float32."""
-    import onnx
-    from onnx import TensorProto, helper, numpy_helper
-
-    m = onnx.load(str(src))                        # pulls in external weight files
-    casts = []
-    for init in list(m.graph.initializer):
-        if init.data_type == TensorProto.FLOAT and int(np.prod(init.dims)) >= min_size:
-            half = numpy_helper.from_array(numpy_helper.to_array(init).astype(np.float16), init.name + "__fp16")
-            m.graph.initializer.remove(init)
-            m.graph.initializer.append(half)
-            casts.append(helper.make_node("Cast", [half.name], [init.name], to=TensorProto.FLOAT))
-    m.graph.node.extend(casts)
-    m.graph.node.sort(key=lambda node: node.op_type != "Cast" or not node.input[0].endswith("__fp16"))   # casts first
-    onnx.save(m, str(dst))
-    print(f"  {len(casts)} weights stored as fp16: {dst.stat().st_size / 2**20:.0f} MB")
 
 
 def commfor() -> None:
@@ -142,77 +123,6 @@ def bfree() -> None:
               "license": "GRIP-UNINA licence (informational and nonprofit use only)", "source": "https://github.com/grip-unina/B-Free"})
 
 
-def omniaid() -> None:
-    """OmniAID v2 (Guo et al., ICML 2026): hybrid mixture of experts on CLIP ViT-L/14 at 336 px, trained on Mirage.
-    MIT licence (Hugging Face model card). The authors' simplified inference model (reward/omniaid.py) is fetched at
-    a fixed commit; the export returns the log-odds instead of the softmax so confident scores do not saturate."""
-    import importlib.util
-    import types
-    import urllib.request
-
-    from huggingface_hub import hf_hub_download
-
-    commit = "40749406fbcd8893c11a160edf4a72a2d4dc7056"
-    folder = SRC / "omniaid"
-    folder.mkdir(parents=True, exist_ok=True)
-    code = folder / "omniaid_model.py"
-    if not code.exists():
-        urllib.request.urlretrieve(f"https://raw.githubusercontent.com/yunncheng/OmniAID/{commit}/reward/omniaid.py", code)
-    spec = importlib.util.spec_from_file_location("omniaid_model", code)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    cfg = json.loads(Path(hf_hub_download("Yunncheng/OmniAID", "config/config_omniaid_v2.json", local_dir=folder)).read_text())
-    model = mod.OmniAID(types.SimpleNamespace(CLIP_path=cfg["CLIP_path"], num_experts=cfg["num_experts"],
-                                              rank_per_expert=cfg["rank_per_expert"], moe_top_k=cfg["moe_top_k"],
-                                              moe_router_hidden_dim=cfg["moe_router_hidden_dim"], is_hybrid=True))
-    state = torch.load(hf_hub_download("Yunncheng/OmniAID", "ckpt/checkpoint_omniaid_v2.pth", local_dir=folder),
-                       map_location="cpu", weights_only=False)
-    state = {k.removeprefix("module."): v for k, v in state.get("model", state).items()}
-    missing, unexpected = model.load_state_dict(state, strict=False)     # the authors load with strict=False too
-    print(f"  {len(missing)} missing, {len(unexpected)} unexpected keys:", missing[:5], unexpected[:5])
-    assert not missing, "checkpoint does not cover the model"
-    model.eval()
-
-    class LogOdds(torch.nn.Module):               # model.forward up to the head, then logit(fake) - logit(real)
-        def __init__(self, net):
-            super().__init__()
-            self.net = net
-
-        def forward(self, images):
-            n = self.net
-            routing = n.feature_extractor(images, output_hidden_states=False).pooler_output
-            hidden = n.ln_pre(n.embeddings(images))
-            semantic = n.gating_network(routing)
-            batch = images.shape[0]
-            gating = {"top_k_indices": torch.cat([semantic["top_k_indices"],
-                                                  torch.full((batch, 1), n.artifact_expert_idx, dtype=torch.long)], 1),
-                      "top_k_gates": torch.cat([semantic["top_k_gates"], torch.ones((batch, 1))], 1)}
-            for layer in n.encoder_layers:
-                hidden = layer(hidden, gating_outputs=gating)[0]
-            pred = n.head(n.ln_post(hidden[:, 0, :]))
-            return pred[:, 1:2] - pred[:, 0:1]
-
-    wrapped = LogOdds(model).eval()
-    sample = torch.randn(1, 3, 336, 336)
-    with torch.no_grad():                         # the wrapper must reproduce the authors' probability exactly
-        assert torch.allclose(torch.sigmoid(wrapped(sample))[:, 0], model(sample), atol=1e-5)
-    # ~600 M parameters exceed the 2 GB limit of a single ONNX file: the exact fp32 graph goes to _src (with its
-    # weights in separate files) as the reference; the app gets one file whose weights are stored as fp16 and cast
-    # back to fp32 when the session loads, so the arithmetic stays fp32
-    exact = folder / "fp32" / "omniaid_v2_clip336.onnx"
-    exact.parent.mkdir(exist_ok=True)
-    torch.onnx.export(wrapped, sample, str(exact), input_names=["image"], output_names=["logit"], opset_version=17,
-                      dynamo=False)
-    parity(exact, wrapped, sample)
-    out = MODELS / "omniaid_v2_clip336.onnx"
-    fp16_weights(exact, out)
-    parity(out, wrapped, sample)
-    register({"id": "omniaid", "name": "OmniAID v2 (CLIP ViT-L/336)", "file": out.name, "kind": "classifier",
-              "size": 336, "policy": "whole", "output": "sigmoid",
-              "mean": [0.48145466, 0.4578275, 0.40821073], "std": [0.26862954, 0.26130258, 0.27577711],
-              "weight": 0, "license": "MIT", "source": "https://github.com/yunncheng/OmniAID (weights: huggingface.co/Yunncheng/OmniAID)"})
-
-
 def trufor() -> None:
     """TruFor (Guillaro et al., CVPR 2023). Research / non-commercial licence, see models/_src/TruFor."""
     import urllib.request
@@ -264,4 +174,4 @@ if __name__ == "__main__":
     MODELS.mkdir(exist_ok=True)
     for name in sys.argv[1:] or ["commfor", "swinv2", "trufor"]:
         print(f"== {name}")
-        {"commfor": commfor, "swinv2": swinv2, "trufor": trufor, "bfree": bfree, "omniaid": omniaid}[name]()
+        {"commfor": commfor, "swinv2": swinv2, "trufor": trufor, "bfree": bfree}[name]()

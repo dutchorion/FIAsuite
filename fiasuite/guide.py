@@ -290,11 +290,7 @@ GUIDE: dict[str, dict] = {
                  "simply cancel one that is confidently right. Community Forensics and SwinV2 count equally.",
                  "B-Free, if installed, is listed for information and not counted: it excels on unprocessed "
                  "generator output in its authors' tests, but on this project's benchmark it rated 10 of 90 photographs as "
-                 "generated and did not improve the ensemble.",
-                 "OmniAID, if installed, is likewise listed and not counted. It judges the whole picture at once, so "
-                 "it has no region map. Measured on 275 generated images and 200 photographs it was weaker alone "
-                 "(AUC 0.918) than either counted detector, and adding it left the ensemble practically unchanged "
-                 "(AUC 0.973 to 0.976, 201 to 196 generated images above 50%)."],
+                 "generated and did not improve the ensemble."],
         "options": {"Regions analysed": "Number of windows for the maps. More = finer map, proportionally slower."},
         "pitfalls": ["Measured by this program on 245 images from 16 current generators and 180 photographs: the "
                      "ensemble rated 68% of the generated images above 50% and none of the photographs. By generator: "
@@ -315,9 +311,6 @@ GUIDE: dict[str, dict] = {
                     ("SwinV2 AI-image detector model", "https://huggingface.co/haywoodsloan/ai-image-detector-deploy"),
                     ("F. Guillaro et al., B-Free: A Bias-Free Training Paradigm for More General AI-generated Image "
                      "Detection, CVPR 2025 (code, weights and licence)", "https://github.com/grip-unina/B-Free"),
-                    ("Y. Guo et al., OmniAID: Decoupling Semantics and Artifacts for Universal AI-Generated Image "
-                     "Detection in the Wild, ICML 2026", "https://proceedings.mlr.press/v306/guo26ag.html"),
-                    ("OmniAID code and weights", "https://github.com/yunncheng/OmniAID"),
                     ("OpenFake - the benchmark of current generators used for the figures above",
                      "https://huggingface.co/datasets/ComplexDataLab/OpenFake"), BENCHMARK,
                     ("Nebioglu, Bilgiç & Popescu, AI-Generated Image Detectors Overrely on Global Artifacts: "

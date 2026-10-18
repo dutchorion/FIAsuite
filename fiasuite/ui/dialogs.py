@@ -11,7 +11,8 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit,
                                QProgressBar, QPushButton,
-                               QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget)
+                               QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser, QTreeWidget, QTreeWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from .. import APP_NAME, calibrate, guide, launder
 from ..analyses import compare, online, prnu
@@ -25,6 +26,66 @@ from .worker import Job, Signals
 
 FORBIDDEN = '\\/:*?"<>|'                            # characters Windows refuses in file names
 SLOW_TOOLS = {"ghosts", "trufor", "clone_blocks", "resampling", "clone_kp"}
+
+
+# ---------------------------------------------------------------------- scan selection
+
+class ScanDialog(QDialog):
+    """Choose the analyses to run, grouped as in the tool tree. A group's check box ticks its whole group."""
+
+    def __init__(self, tools, selected: set[str], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Scan")
+        self.resize(460, 640)
+        lay = QVBoxLayout(self)
+        note = QLabel("Choose the analyses to run on this image. Online services upload the image to a third "
+                      "party; you are asked to confirm before anything is sent.")
+        note.setWordWrap(True)
+        note.setObjectName("muted")
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setIndentation(14)
+        self.items: dict[str, QTreeWidgetItem] = {}
+        groups: dict[str, QTreeWidgetItem] = {}
+        for tool in tools:
+            if tool.group not in groups:
+                groups[tool.group] = QTreeWidgetItem(self.tree, [tool.group])
+                groups[tool.group].setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+            item = QTreeWidgetItem(groups[tool.group], [tool.title])
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            item.setCheckState(0, Qt.Checked if tool.id in selected else Qt.Unchecked)
+            item.setToolTip(0, tool.help)
+            self.items[tool.id] = item
+        self.groups = list(groups.values())
+        self.tree.expandAll()
+        self.tree.itemChanged.connect(self._update_run)
+        row = QHBoxLayout()
+        for text, state in (("Select all", Qt.Checked), ("Select none", Qt.Unchecked)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, state=state: self.set_all(state))
+            row.addWidget(b)
+        row.addStretch(1)
+        buttons = QDialogButtonBox()
+        self.run = buttons.addButton("Run scan", QDialogButtonBox.AcceptRole)
+        self.run.setObjectName("primary")
+        buttons.addButton(QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        row.addWidget(buttons)
+        lay.addWidget(note)
+        lay.addWidget(self.tree, 1)
+        lay.addLayout(row)
+        self._update_run()
+
+    def set_all(self, state):
+        for group in self.groups:
+            group.setCheckState(0, state)
+
+    def selected(self) -> set[str]:
+        return {tool_id for tool_id, item in self.items.items() if item.checkState(0) == Qt.Checked}
+
+    def _update_run(self, *_):
+        self.run.setEnabled(bool(self.selected()))
 
 
 # ---------------------------------------------------------------------- report

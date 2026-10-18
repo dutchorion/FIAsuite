@@ -24,3 +24,6 @@ bench/
 # camera fingerprints built by the user
 fingerprints/
 fiasuite-error.log
+
+# online detector replies, kept per file hash so a reopened file shows them again
+online_results.json

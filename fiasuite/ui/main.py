@@ -9,13 +9,15 @@ from pathlib import Path
 
 import cv2
 from PySide6.QtCore import QPointF, QRectF, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import (QAction, QColor, QIcon, QKeySequence, QPainter, QPalette, QPen, QPixmap, QPolygonF, QTextLayout,
+                           QTextOption)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDockWidget, QDoubleSpinBox,
                                QFileDialog, QFormLayout,
                                QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox,
                                QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter,
-                               QStackedWidget, QStyle, QStyleOptionSlider, QTableWidget, QTableWidgetItem, QTextBrowser,
-                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionSlider, QStyleOptionViewItem,
+                               QTableWidget, QTableWidgetItem, QTextBrowser, QToolButton, QTreeWidget, QTreeWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__, components
 from ..analyses import geometry, online
@@ -97,6 +99,51 @@ class ClickSlider(QSlider):
                 self.setValue(QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), offset, span,
                                                              opt.upsideDown))
         super().mousePressEvent(event)      # the handle now sits under the cursor: dragging continues from there
+
+
+class WrapDelegate(QStyledItemDelegate):
+    """Table cells that wrap at word boundaries, and inside long words (tag names, hashes) only where they must,
+    so no text is cut off. Row heights follow from sizeHint; the table recomputes them when a column changes width."""
+    PAD = 4
+
+    @staticmethod
+    def _option() -> QTextOption:
+        option = QTextOption()
+        option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        return option
+
+    def _height(self, text: str, font, width: float) -> float:
+        layout = QTextLayout(text, font)
+        layout.setTextOption(self._option())
+        layout.beginLayout()
+        height = 0.0
+        while (line := layout.createLine()).isValid():
+            line.setLineWidth(max(width, 1.0))
+            height += line.height()
+        layout.endLayout()
+        return height
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        style = opt.widget.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)    # background and selection
+        rect = QRectF(style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)).adjusted(
+            self.PAD, self.PAD / 2, -self.PAD, 0)
+        painter.save()
+        painter.setFont(opt.font)
+        selected = opt.state & QStyle.State_Selected
+        painter.setPen(opt.palette.color(QPalette.HighlightedText if selected else QPalette.Text))
+        painter.drawText(rect, text, self._option())
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        width = self.parent().columnWidth(index.column()) - 2 * self.PAD - 6
+        text = str(index.data() or "")
+        hint.setHeight(max(hint.height(), int(self._height(text, option.font, width) + self.PAD + 4)))
+        return hint
 
 
 class ClickProgressBar(QProgressBar):
@@ -552,6 +599,10 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().hide()
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setWordWrap(True)
+        self.table.setItemDelegate(WrapDelegate(self.table))
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)    # cells wrap instead
+        self.table.horizontalHeader().setMinimumSectionSize(60)
+        self.table.horizontalHeader().sectionResized.connect(lambda *_: self.table.resizeRowsToContents())
         self.table_search = QLineEdit()
         self.table_search.setPlaceholderText("Search properties and values")
         self.table_search.setClearButtonEnabled(True)
@@ -929,12 +980,22 @@ class MainWindow(QMainWindow):
             parts.append(f'<p><span style="color:{color}">&#9679; <b>{html.escape(f.title)}</b></span><br>'
                          f'<span style="color:#c4c6cc">{detail}</span></p>')
         self.findings.setHtml("".join(parts))
+        self.table.clearSpans()
         self.table.setRowCount(len(res.table))
         for i, (k, v) in enumerate(res.table):
             self.table.setItem(i, 0, QTableWidgetItem(str(k)))
             self.table.setItem(i, 1, QTableWidgetItem(str(v)))
+            if str(k).startswith("--- ") and str(k).endswith(" ---") and not v:     # a section heading
+                item = self.table.item(i, 0)
+                item.setText(str(k)[4:-4])
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+                item.setForeground(QColor(theme.ACCENT).lighter(150))
+                self.table.setSpan(i, 0, 1, 2)
         self.table.resizeColumnToContents(0)
-        self.table.setColumnWidth(0, min(self.table.columnWidth(0), 210))
+        self.table.setColumnWidth(0, min(self.table.columnWidth(0), 210, int(self.table.viewport().width() * 0.45)))
+        self.table.resizeRowsToContents()          # wrapped cells: rows as tall as their text
         self._filter_table()
 
     def _filter_table(self):

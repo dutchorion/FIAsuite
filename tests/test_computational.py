@@ -32,30 +32,34 @@ def sources(meta, data=b""):
     return [source for source, _ in computational.recorded_processing(meta, data)]
 
 
+def rows(meta, data=b""):
+    return {r.tag: r for r in computational.describe(meta, data)}
+
+
 def test_iphone_composite_frames_gain_map_and_style():
     recorded = dict(computational.recorded_processing(IPHONE_15_PLUS))
-    assert "8 source frames" in recorded["EXIF CompositeImage"]
-    assert {"Apple HDRHeadroom / HDRGain", "Apple SemanticStyle"} <= set(recorded)
+    assert recorded["ExifIFD:CompositeImageCount"] == "8 source frames"
+    assert {"ExifIFD:CompositeImage", "Apple:HDRHeadroom / Apple:HDRGain", "Apple:SemanticStyle"} <= set(recorded)
     device, lines = computational.device_defaults(IPHONE_15_PLUS)
     assert any("Smart HDR" in line for line in lines) and any("Photonic Engine" in line for line in lines)
 
 
 def test_portrait_hdr_on_iphone_and_depth_map_on_pixel():
-    assert "portrait" in dict(computational.recorded_processing(IPHONE_11_PORTRAIT))["EXIF CustomRendered"]
-    assert {"Google camera XMP", "depth map", "EXIF DigitalZoomRatio"} <= set(sources(PIXEL_4A_PORTRAIT))
+    assert "portrait" in dict(computational.recorded_processing(IPHONE_11_PORTRAIT))["ExifIFD:CustomRendered"]
+    assert {"XMP-GCamera:SpecialTypeID", "XMP-Device", "ExifIFD:DigitalZoomRatio"} <= set(sources(PIXEL_4A_PORTRAIT))
 
 
 def test_pixel_10_hdr_plus_and_computational_capture_declaration():
-    assert {"Google HDR+ maker note", "IPTC digital source type", "XMP hdrgm"} <= set(sources(PIXEL_10_PRO_XL))
+    assert {"Google:HDRPSoftware", "CBOR:ActionsDigitalSourceType", "XMP-hdrgm:Version"} <= set(sources(PIXEL_10_PRO_XL))
     _, lines = computational.device_defaults(PIXEL_10_PRO_XL)
     assert any("Pro Res Zoom" in line for line in lines)
 
 
 def test_generative_zoom_range_is_named():
     zoomed = dict(PIXEL_10_PRO_XL, **{"ExifIFD:DigitalZoomRatio": 50})
-    assert "generative AI" in dict(computational.recorded_processing(zoomed))["EXIF DigitalZoomRatio"]
+    assert "generative AI" in dict(computational.recorded_processing(zoomed))["ExifIFD:DigitalZoomRatio"]
     tiny = dict(IPHONE_15_PLUS, **{"ExifIFD:DigitalZoomRatio": 1.001988072})          # rounding, not zoom
-    assert "EXIF DigitalZoomRatio" not in sources(tiny)
+    assert "ExifIFD:DigitalZoomRatio" not in sources(tiny)
 
 
 def test_samsung_trailer_records_and_galaxy_names():
@@ -66,12 +70,25 @@ def test_samsung_trailer_records_and_galaxy_names():
 
 
 def test_other_makers_and_cameras():
-    assert {"OnePlus IsHDRActive", "OnePlus bokeh"} <= set(sources(ONEPLUS_BOKEH))
+    assert {"XMP-OPMedia:IsHDRActive", "XMP-OPMedia:IsBokehActive", "XMP-OPMedia:CaptureMode"} <= set(sources(ONEPLUS_BOKEH))
     assert computational.device_defaults(ONEPLUS_BOKEH)
     for meta in (IPHONE_7, CANON):
         assert computational.device_defaults(meta) is None and sources(meta) == []
     assert computational.device_defaults({"IFD0:Make": "SONY", "IFD0:Model": "ILCE-7M4"}) is None     # camera
     assert computational.device_defaults({"IFD0:Make": "Sony", "IFD0:Model": "XQ-DQ54"})               # Xperia
+
+
+def test_modes_module_and_exposure_are_explained():
+    pixel = {"IFD0:Make": "Google", "IFD0:Model": "Pixel 9 Pro", "Google:FrameCount": 11,
+             "ExifIFD:LensModel": "Pixel 9 Pro back camera 2.02mm f/1.7", "ExifIFD:FocalLengthIn35mmFormat": "12 mm",
+             "XMP-GCamera:MotionPhoto": 1, "ExifIFD:ExposureTime": "1/3", "ExifIFD:BrightnessValue": -2.5}
+    r = rows(pixel)
+    assert r["Google:FrameCount"].meaning == "11 frames merged into this photo" and r["Google:FrameCount"].evidence
+    assert "ultra-wide" in r["ExifIFD:FocalLengthIn35mmFormat"].meaning
+    assert "night mode" in r["ExifIFD:ExposureTime"].meaning and "low light" in r["ExifIFD:BrightnessValue"].meaning
+    assert "video" in r["XMP-GCamera:MotionPhoto"].meaning and not r["XMP-GCamera:MotionPhoto"].evidence
+    style = rows({"Apple:SemanticStyle": "{_0=1,_1=0.5,_2=0,_3=2}"})["Apple:SemanticStyle"]
+    assert "'Vibrant'" in style.meaning and "tone 0.5" in style.meaning
 
 
 @pytest.fixture()
@@ -87,6 +104,8 @@ def test_phone_photo_is_orange_and_makes_file_history_suspicious(evidence):
     res = computational.detect(evidence(IPHONE_15_PLUS))
     assert [f.severity for f in res.findings] == [WARN, WARN] and res.score == computational.SCORE
     assert "Not a finding of manipulation" in res.findings[-1].detail
+    table = dict(res.table)
+    assert "--- Multi-frame and HDR ---" in table and "[evidence]" in table["ExifIFD:CompositeImage"]
     verdict = summarize({"computational": res})["provenance"]
     assert verdict.level == "Suspicious" and verdict.color == "#f76b15"
 

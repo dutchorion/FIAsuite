@@ -60,8 +60,17 @@ GUIDE: dict[str, dict] = {
                 "blur the background from a depth map (portrait mode, bokeh) and apply AI scene enhancement. This "
                 "check names the default processing of the phone that took the picture and lists every trace of it "
                 "recorded in the file.",
-        "read": ["'Smartphone with computational photography by default': the camera model is a phone that merges "
-                 "frames for every photo. The table lists what that model does by default.",
+        "read": ["The table goes section by section - device, camera module, exposure, camera mode, multi-frame and "
+                 "HDR, depth and portrait, zoom, scene and style processing, embedded media, and the model's default "
+                 "processing. Each row names the ExifTool tag, its value and what it means; rows marked [evidence] "
+                 "prove computational capture.",
+                 "Examples of what it can tell: which camera module took the picture (ultra-wide, main, telephoto, "
+                 "front) from the lens name and the 35 mm-equivalent focal length; how many frames were merged (Pixel "
+                 "FrameCount, EXIF CompositeImageCount); the Photographic Style preset on an iPhone; a long handheld "
+                 "exposure or low light that points to night stacking; a Live Photo or motion-photo video recorded "
+                 "around the shot.",
+                 "'Smartphone with computational photography by default': the camera model is a phone that merges "
+                 "frames for every photo.",
                  "'Computational capture recorded in the file': concrete traces, each with the tag it comes from - "
                  "EXIF CompositeImage (with the number of source frames), iOS HDR and Portrait renderings, Apple's and "
                  "Google's HDR records, embedded depth maps, gain maps, digital zoom, the IPTC 'computational "

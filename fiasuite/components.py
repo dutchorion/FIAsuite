@@ -20,6 +20,7 @@ from typing import Callable
 import requests
 
 from . import core
+from .analyses.metadata import exiftool_path
 
 RELEASE_REPO = "dutchorion/FIAsuite"          # private: the converted models live in its release assets
 RELEASE_TAG = "models-v1"
@@ -81,7 +82,8 @@ def target(c: Component) -> Path:
 
 
 def installed(c: Component) -> bool:
-    return target(c).exists()
+    # ExifTool also counts when it is found outside vendor/ (the system exiftool on Linux)
+    return target(c).exists() or (c.kind == "exiftool" and exiftool_path().exists())
 
 
 def missing() -> list[Component]:

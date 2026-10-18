@@ -168,6 +168,10 @@ exiftool.org and the SwinV2 detector from Hugging Face; neither needs an account
     .venv\Scripts\python -m fiasuite                      # run from source
     .venv\Scripts\python tools\build_portable.py         # -> dist\FIASuite (full) and dist\FIASuite-slim
 
+**Linux.** The engine (not the desktop window) also runs headless on Linux: install `requirements-linux.txt`
+(the same pins with `onnxruntime` instead of `onnxruntime-directml`) or build the `Dockerfile`, and point
+`FIASUITE_HOME` at the folder holding `models/`, `config.json` and `fingerprints/`; ExifTool is taken from the system.
+
 **GPU.** Neural models run on the CPU unless *Settings > Run neural models on the GPU* is ticked. The GPU path
 uses DirectML, which works on NVIDIA, AMD and Intel; on an AMD Radeon 780M it gives the same scores as the CPU
 (differences below 1e-3) about twice as fast. It is opt-in because the same GPU, with a driver in a bad state

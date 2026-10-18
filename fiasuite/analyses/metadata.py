@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
+import shutil
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
 import cv2
 import numpy as np
 
-from ..core import ALERT, INFO, NOTE, WARN, Evidence, Finding, Result, app_dir
+from .. import core
+from ..core import ALERT, INFO, NOTE, WARN, Evidence, Finding, Result
 
 # unmistakable anywhere, including captions and keywords
 AI_GENERATORS = re.compile(
@@ -46,7 +50,16 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def exiftool_path():
-    return app_dir() / "vendor" / "exiftool" / "exiftool.exe"
+    """The bundled ExifTool (vendor/exiftool/exiftool.exe on Windows). Elsewhere: a bundled
+    vendor/exiftool/exiftool if present, otherwise the system exiftool on PATH. Callers test .exists()."""
+    folder = core.app_dir() / "vendor" / "exiftool"
+    if os.name == "nt":
+        return folder / "exiftool.exe"
+    bundled = folder / "exiftool"
+    if bundled.exists():
+        return bundled
+    found = shutil.which("exiftool")
+    return Path(found) if found else bundled
 
 
 def _exiftool(args: list[str], binary: bool = False):

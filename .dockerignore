@@ -1,0 +1,13 @@
+.venv
+.venv-convert
+build
+dist
+bench
+models/*.onnx
+models/_src
+vendor
+fingerprints
+config.json
+.git
+**/__pycache__
+.pytest_cache

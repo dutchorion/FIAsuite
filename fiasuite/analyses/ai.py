@@ -17,6 +17,7 @@ Both policies also produce a per-crop map that localises generated regions.
 from __future__ import annotations
 
 import json
+import os
 import threading
 
 import cv2
@@ -37,6 +38,15 @@ def use_gpu() -> bool:
         return bool(json.loads((app_dir() / "config.json").read_text(encoding="utf-8")).get("use_gpu", False))
     except (OSError, json.JSONDecodeError):
         return False
+
+
+def threads() -> int:
+    """CPU threads per ONNX session: config.json {"threads": n}. Default leaves half the cores to the desktop."""
+    default = max(1, (os.cpu_count() or 4) // 2)
+    try:
+        return max(1, int(json.loads((app_dir() / "config.json").read_text(encoding="utf-8")).get("threads", default)))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return default
 
 
 def _run(sess, feed: dict):
@@ -60,12 +70,10 @@ gpu_problems: dict[str, str] = {}              # model id -> why it was taken of
 
 
 def _cpu_session(entry: dict):
-    import os
-
     import onnxruntime as ort
     opts = ort.SessionOptions()
     opts.log_severity_level = 3
-    opts.intra_op_num_threads = max(1, (os.cpu_count() or 4) // 2)    # leave half the cores to the desktop
+    opts.intra_op_num_threads = threads()
     basic = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
     if entry.get("cpu_optimization") == "basic":
         opts.graph_optimization_level = basic

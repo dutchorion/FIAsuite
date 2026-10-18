@@ -1,6 +1,7 @@
 """Setup-wizard logic, exercised against a local web server (no internet)."""
 import hashlib
 import io
+import shutil
 import threading
 import zipfile
 from functools import partial
@@ -14,6 +15,7 @@ from fiasuite import components, core
 @pytest.fixture()
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr(shutil, "which", lambda *a, **k: None)      # no system ExifTool (Linux) in a fresh folder
     return tmp_path
 
 

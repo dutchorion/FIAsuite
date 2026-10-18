@@ -7,6 +7,7 @@ orientation, so every map is aligned with the pixel grid stored in the file
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -25,7 +26,11 @@ SEVERITY_ORDER = {INFO: 0, NOTE: 1, WARN: 2, ALERT: 3}
 
 
 def app_dir() -> Path:
-    """Folder holding the exe (frozen) or the project root (source run)."""
+    """Folder holding the exe (frozen) or the project root (source run): models/, vendor/, fingerprints/
+    and config.json are looked up here. The environment variable FIASUITE_HOME overrides it (server use)."""
+    home = os.environ.get("FIASUITE_HOME")
+    if home:
+        return Path(home)
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent

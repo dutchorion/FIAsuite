@@ -1,0 +1,11 @@
+# Linux (headless, CPU only): the pins of requirements.txt with onnxruntime in place of
+# onnxruntime-directml, which exists for Windows only. The Dockerfile installs this list.
+PySide6-Essentials==6.11.2
+opencv-python-headless==5.0.0.93
+numpy==2.5.3
+scipy==1.18.1
+Pillow==12.3.0
+pillow-heif==1.7.0
+onnxruntime==1.24.4
+requests==2.34.2
+c2pa-python==0.37.10

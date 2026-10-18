@@ -13,6 +13,8 @@ policy "crop"   the network sees native-resolution crops (pixel-level traces kep
                 the image score is the mean over a grid of crops.
 policy "squash" the network sees the whole image resized to its input size.
 Both policies also produce a per-crop map that localises generated regions.
+policy "whole"  the whole image resized to the input size, one pass and no map: for networks trained that way
+                that are too slow to run once per region (OmniAID).
 """
 from __future__ import annotations
 
@@ -160,6 +162,11 @@ def classify(ev: Evidence, entry: dict, max_tiles: int = 24) -> tuple[float, np.
     """(image probability, per-tile probability grid, max tile probability)."""
     sess, size = _session(entry), int(entry["size"])
     policy = entry.get("policy", "crop")
+    if policy == "whole":                          # PIL's filtered bilinear resize, as torchvision's Resize
+        from PIL import Image
+        rgb = Image.fromarray(np.ascontiguousarray(ev.bgr[:, :, ::-1])).resize((size, size), Image.BILINEAR)
+        score = _probability(sess, _prepare(np.asarray(rgb)[:, :, ::-1], entry), entry)
+        return score, np.array([[score]], np.float32), score
     img = ev.bgr
     if min(ev.height, ev.width) < size:            # never upscale more than needed, keep aspect
         s = size / min(ev.height, ev.width)
@@ -219,9 +226,11 @@ def detect(ev: Evidence, max_tiles: int = 24) -> Result:
         scores.append(score)
         weights.append(float(entry.get("weight", 1.0)))
         res.metrics[entry["id"]] = score
-        res.table.append((entry["name"], f"{score:.1%} generated   (highest region {peak:.1%}, {grid.size} regions)"
+        regions = f"highest region {peak:.1%}, {grid.size} regions" if grid.size > 1 else "whole image only"
+        res.table.append((entry["name"], f"{score:.1%} generated   ({regions})"
                           + ("" if weights[-1] else "   - shown for information, not counted in the ensemble")))
-        res.views[entry["name"]] = heatmap(grid, (ev.height, ev.width), 0, 1, cv2.COLORMAP_TURBO)
+        if grid.size > 1:                          # a one-cell map is a flat colour, not a localisation
+            res.views[entry["name"]] = heatmap(grid, (ev.height, ev.width), 0, 1, cv2.COLORMAP_TURBO)
         if peak > 0.9 and score < 0.5 and grid.size >= 6:
             res.findings.append(Finding(WARN, f"{entry['name']}: a region looks generated",
                 f"The image as a whole scores {score:.0%}, but one region scores {peak:.0%}: possible local AI edit "

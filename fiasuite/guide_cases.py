@@ -207,6 +207,12 @@ CASES: dict[str, list[tuple[str, str, str | None]]] = {
          "generative fill) and ingredients: the recorded editing history.", None),
         ("Validation failure", "The manifest is present but the hash no longer matches: the file was changed after signing.", None),
         ("No manifest", "By far the most common case. It says nothing: almost every platform strips the manifest.", None)],
+    "trustmark": [
+        ("Watermarked, metadata intact", "A TrustMark identifier and a valid C2PA manifest: the file is as its "
+         "issuer published it, and the identifier can recover the credentials if the metadata is lost later.", None),
+        ("Watermarked, metadata stripped", "A TrustMark identifier but no manifest: the file was re-saved or uploaded "
+         "after watermarking. Ask the issuer to look the identifier up.", None),
+        ("No watermark", "By far the most common case. It says nothing.", None)],
     "jpeg": [
         ("Camera file", "Baseline JPEG, the manufacturer's own quantization tables, 4:2:2 or 4:2:0 subsampling, an Exif "
          "segment, often a Multi-Picture segment with a preview after the main image.", None),

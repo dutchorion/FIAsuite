@@ -87,3 +87,14 @@ def test_gpu_selfcheck_rejects_a_crawling_gpu(monkeypatch):
     monkeypatch.setattr(time, "perf_counter", lambda: next(ticks))
     cpu, gpu = _FakeSession(lambda v: v), _FakeSession(lambda v: v)
     assert "needed 29 s" in ai.gpu_mismatch(gpu, cpu, ENTRY)
+
+
+@pytest.mark.skipif("omniaid" not in REGISTRY, reason="OmniAID not installed")
+def test_whole_image_detector_is_reported_but_not_counted(tmp_path):
+    ev = Evidence(synth.save(tmp_path / "photo.jpg", synth.camera(synth.scene(300, 400)), 90))
+    score, grid, peak = ai.classify(ev, REGISTRY["omniaid"])
+    assert grid.shape == (1, 1) and score == peak                   # one pass over the whole picture, no map
+    res = ai.detect(ev, max_tiles=1)
+    row = dict(res.table)[REGISTRY["omniaid"]["name"]]
+    assert "whole image only" in row and "not counted" in row
+    assert REGISTRY["omniaid"]["name"] not in res.views

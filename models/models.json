@@ -74,5 +74,49 @@
     "license": "GRIP-UNINA licence (informational and nonprofit use only)",
     "source": "https://github.com/grip-unina/B-Free",
     "weight": 0
+  },
+  {
+    "id": "trustmark_q",
+    "name": "Adobe TrustMark decoder Q",
+    "file": "trustmark_decoder_Q.onnx",
+    "kind": "trustmark",
+    "variant": "Q",
+    "size": 256,
+    "square": false,
+    "license": "MIT",
+    "source": "https://github.com/adobe/trustmark (ONNX: cai-watermark.adobe.net/watermarking/trustmark-models/decoder_Q.onnx)"
+  },
+  {
+    "id": "trustmark_p",
+    "name": "Adobe TrustMark decoder P",
+    "file": "trustmark_decoder_P.onnx",
+    "kind": "trustmark",
+    "variant": "P",
+    "size": 224,
+    "square": true,
+    "license": "MIT",
+    "source": "https://github.com/adobe/trustmark (ONNX: cai-watermark.adobe.net/watermarking/trustmark-models/decoder_P.onnx)"
+  },
+  {
+    "id": "omniaid",
+    "name": "OmniAID v2 (CLIP ViT-L/336)",
+    "file": "omniaid_v2_clip336.onnx",
+    "kind": "classifier",
+    "size": 336,
+    "policy": "whole",
+    "output": "sigmoid",
+    "mean": [
+      0.48145466,
+      0.4578275,
+      0.40821073
+    ],
+    "std": [
+      0.26862954,
+      0.26130258,
+      0.27577711
+    ],
+    "weight": 0,
+    "license": "MIT",
+    "source": "https://github.com/yunncheng/OmniAID (weights: huggingface.co/Yunncheng/OmniAID)"
   }
 ]

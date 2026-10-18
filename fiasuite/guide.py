@@ -53,6 +53,36 @@ GUIDE: dict[str, dict] = {
                     ("Content Credentials Verify (the reference web checker)", "https://contentcredentials.org/verify"),
                     ("c2pa-python, the library used here", "https://opensource.contentauthenticity.org/docs/c2pa-python/")],
     },
+    "trustmark": {
+        "what": "Decodes Adobe TrustMark, an open invisible watermark (MIT licence) that the C2PA lists as a 'soft "
+                "binding': an identifier hidden in the pixels. Unlike a C2PA manifest it survives metadata stripping, "
+                "re-saving and moderate JPEG compression, so a file's Content Credentials can be looked up again by it "
+                "('durable Content Credentials').",
+        "read": ["Both published decoders run: variant Q (the default) and P (low visibility). Variants are not "
+                 "interchangeable; a mark is reported by the decoder that matches it.",
+                 "A mark counts only when its error correction is valid AND the decoder's signal is strong. Signal "
+                 "strength is the network's average confidence per bit: marked images read about 5-9, unmarked ones "
+                 "below about 2.",
+                 "The payload is an identifier chosen by whoever embedded it, shown in hex (and as text when it looks "
+                 "like words). Only that party's repository can turn it back into Content Credentials.",
+                 "A watermark together with a missing or invalid C2PA manifest means the metadata was removed or the "
+                 "file was changed after watermarking."],
+        "pitfalls": ["Absence means nothing: few services embed TrustMark, and strong cropping or resizing removes it. "
+                     "Variant P trades robustness for invisibility: in a small JPEG even Adobe's own decoder misses it.",
+                     "Adobe's own reference decoder accepts any bit pattern its error correction can repair; on 202 "
+                     "unmarked images that gave 14 false hits. FIASuite therefore also requires a strong signal, which "
+                     "rejected all of them.",
+                     "The BCH_SUPER schema is also TrustMark's 'signpost' to a second watermark from another vendor. Its "
+                     "payload layout is not documented; a registry name shown for it is a lead, not a decoded fact.",
+                     "A watermark says the file passed through software that embeds it. It says nothing about whether "
+                     "the scene is real or AI-generated."],
+        "sources": [("Adobe TrustMark (code, models, MIT licence)", "https://github.com/adobe/trustmark"),
+                    ("T. Bui, S. Agarwal, J. Collomosse, TrustMark: Universal Watermarking for Arbitrary Resolution "
+                     "Images (2023)", "https://arxiv.org/abs/2311.18297"),
+                    ("Content Authenticity Initiative: durable Content Credentials",
+                     "https://contentauthenticity.org/blog/digital-watermarking-interoperable-durable-content-credentials"),
+                    ("C2PA soft-binding algorithm list", "https://github.com/c2pa-org/softbinding-algorithm-list")],
+    },
     "jpeg": {
         "what": "The internal structure of the JPEG container: marker sequence, quantization tables, chroma "
                 "subsampling, application segments, and any bytes after the end of the image.",
@@ -260,7 +290,11 @@ GUIDE: dict[str, dict] = {
                  "simply cancel one that is confidently right. Community Forensics and SwinV2 count equally.",
                  "B-Free, if installed, is listed for information and not counted: it excels on unprocessed "
                  "generator output in its authors' tests, but on this project's benchmark it rated 10 of 90 photographs as "
-                 "generated and did not improve the ensemble."],
+                 "generated and did not improve the ensemble.",
+                 "OmniAID, if installed, is likewise listed and not counted. It judges the whole picture at once, so "
+                 "it has no region map. Measured on 275 generated images and 200 photographs it was weaker alone "
+                 "(AUC 0.918) than either counted detector, and adding it left the ensemble practically unchanged "
+                 "(AUC 0.973 to 0.976, 201 to 196 generated images above 50%)."],
         "options": {"Regions analysed": "Number of windows for the maps. More = finer map, proportionally slower."},
         "pitfalls": ["Measured by this program on 245 images from 16 current generators and 180 photographs: the "
                      "ensemble rated 68% of the generated images above 50% and none of the photographs. By generator: "
@@ -268,14 +302,28 @@ GUIDE: dict[str, dict] = {
                      "A generator the networks never saw can pass almost unnoticed.",
                      "Independent 2026 benchmarks put the best open detectors near 78 % accuracy overall and at 18-30 % "
                      "on the newest commercial generators. A low score does NOT establish authenticity.",
-                     "Recompression, resizing and screenshots lower accuracy further. Use Calibrate on your own material."],
+                     "Recompression, resizing and screenshots lower accuracy further. Use Calibrate on your own material.",
+                     "Local AI edits (inpainting, generative fill) are judged unreliably. Detectors react mainly to the "
+                     "traces the generator's encoder leaves across the WHOLE picture, not to the edited area: an "
+                     "inpainted photo can be rated fully generated, and an edit pasted back into the original pixels can "
+                     "pass unnoticed (Nebioglu et al., 2026). Use TruFor and the signal tools to localise an edit.",
+                     "Documents (invoices, receipts, certificates, screenshots of text) are harder than photographs: "
+                     "detectors trained on natural images lose more than 7 points of AUC on AI-generated documents "
+                     "(Fu et al., 2026). Treat a low score on a document with extra caution."],
         "sources": [("J. Park & A. Owens, Community Forensics (paper)", "https://arxiv.org/abs/2411.04125"),
                     ("Community Forensics model", "https://huggingface.co/OwensLab/commfor-model-384"),
                     ("SwinV2 AI-image detector model", "https://huggingface.co/haywoodsloan/ai-image-detector-deploy"),
                     ("F. Guillaro et al., B-Free: A Bias-Free Training Paradigm for More General AI-generated Image "
                      "Detection, CVPR 2025 (code, weights and licence)", "https://github.com/grip-unina/B-Free"),
+                    ("Y. Guo et al., OmniAID: Decoupling Semantics and Artifacts for Universal AI-Generated Image "
+                     "Detection in the Wild, ICML 2026", "https://proceedings.mlr.press/v306/guo26ag.html"),
+                    ("OmniAID code and weights", "https://github.com/yunncheng/OmniAID"),
                     ("OpenFake - the benchmark of current generators used for the figures above",
-                     "https://huggingface.co/datasets/ComplexDataLab/OpenFake"), BENCHMARK],
+                     "https://huggingface.co/datasets/ComplexDataLab/OpenFake"), BENCHMARK,
+                    ("Nebioglu, Bilgiç & Popescu, AI-Generated Image Detectors Overrely on Global Artifacts: "
+                     "Evidence from Inpainting Exchange (2026)", "https://arxiv.org/abs/2602.00192"),
+                    ("Z. Fu et al., Beyond Natural Images: Rethinking AI-Generated Image Detection in Documents (2026)",
+                     "https://arxiv.org/abs/2609.14352")],
     },
     "trufor": {
         "what": "TruFor combines the image with a learned camera-noise fingerprint (Noiseprint++) in a transformer and "

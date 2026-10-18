@@ -31,7 +31,7 @@ def server(tmp_path_factory):
 
 
 def test_missing_and_installed(app):
-    assert [c.id for c in components.missing()] == ["exiftool", "commfor", "swinv2", "trufor"]
+    assert [c.id for c in components.missing()] == ["exiftool", "commfor", "swinv2", "trustmark_q", "trustmark_p", "trufor"]
     target = components.target(components.BY_ID["commfor"])
     target.parent.mkdir(parents=True)
     target.write_bytes(b"x")

@@ -2,7 +2,7 @@
 
 A portable Windows dashboard for finding image manipulation and AI generation, whether it affects the whole
 picture or only part of it. No installation, no command line: copy the `FIASuite` folder anywhere (USB stick
-included) and double-click **FIASuite.exe**. Everything runs locally; nothing leaves the PC unless you press an
+included) and double-click **FIASuite.bat**. Everything runs locally; nothing leaves the PC unless you press an
 upload button.
 
 ## Using it
